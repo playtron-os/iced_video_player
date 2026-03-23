@@ -219,7 +219,6 @@ where
         _layout: advanced::Layout<'_>,
         _cursor: advanced::mouse::Cursor,
         _renderer: &Renderer,
-        _clipboard: &mut dyn advanced::Clipboard,
         shell: &mut advanced::Shell<'_, Message>,
         _viewport: &iced::Rectangle,
     ) {

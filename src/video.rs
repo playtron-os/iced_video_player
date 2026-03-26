@@ -468,27 +468,24 @@ impl Video {
         }
 
         // The element may be a Bin (gst_parse wraps multi-element pipelines).
-        if let Ok(bin) = element.clone().downcast::<gst::Bin>() {
-            if let Some(found) = bin.by_name(name) {
-                return found
-                    .downcast::<gst_app::AppSink>()
-                    .map_err(|_| Error::Cast);
-            }
+        if let Ok(bin) = element.clone().downcast::<gst::Bin>()
+            && let Some(found) = bin.by_name(name)
+        {
+            return found
+                .downcast::<gst_app::AppSink>()
+                .map_err(|_| Error::Cast);
         }
 
         // Try ghost pad parent — gst_parse wraps single elements too.
-        if let Some(pad) = element.pads().first() {
-            if let Ok(ghost) = pad.clone().dynamic_cast::<gst::GhostPad>() {
-                if let Some(parent) = ghost.parent_element() {
-                    if let Ok(bin) = parent.downcast::<gst::Bin>() {
-                        if let Some(found) = bin.by_name(name) {
-                            return found
-                                .downcast::<gst_app::AppSink>()
-                                .map_err(|_| Error::Cast);
-                        }
-                    }
-                }
-            }
+        if let Some(pad) = element.pads().first()
+            && let Ok(ghost) = pad.clone().dynamic_cast::<gst::GhostPad>()
+            && let Some(parent) = ghost.parent_element()
+            && let Ok(bin) = parent.downcast::<gst::Bin>()
+            && let Some(found) = bin.by_name(name)
+        {
+            return found
+                .downcast::<gst_app::AppSink>()
+                .map_err(|_| Error::Cast);
         }
 
         Err(Error::AppSink(name.to_string()))

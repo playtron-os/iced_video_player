@@ -10,6 +10,7 @@ use std::{sync::Arc, time::Instant};
 use tracing::error;
 
 /// Video player widget which displays the current frame of a [`Video`](crate::Video).
+#[allow(clippy::type_complexity)]
 pub struct VideoPlayer<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer>
 where
     Renderer: PrimitiveRenderer,

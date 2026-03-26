@@ -167,6 +167,7 @@ impl Pipeline for VideoPipeline {
 }
 
 impl VideoPipeline {
+    #[allow(clippy::too_many_arguments)]
     fn upload(
         &mut self,
         device: &wgpu::Device,
@@ -336,6 +337,7 @@ impl VideoPipeline {
     ///
     /// Returns `true` if the import succeeded, `false` if it failed (caller
     /// should fall back to the CPU `upload()` path).
+    #[allow(clippy::too_many_arguments)]
     fn upload_dmabuf(
         &mut self,
         device: &wgpu::Device,

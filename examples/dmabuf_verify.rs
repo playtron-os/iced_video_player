@@ -19,7 +19,7 @@ use iced_wgpu::wgpu::hal::vulkan as vk_hal;
 const ALIGN: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 fn align_up(value: u32, alignment: u32) -> u32 {
-    (value + alignment - 1) / alignment * alignment
+    value.div_ceil(alignment) * alignment
 }
 
 fn main() {
@@ -249,6 +249,7 @@ struct PlaneResult {
     max_diff: u8,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn test_plane_import(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -310,7 +311,7 @@ fn test_plane_import(
         let guard = device.as_hal::<vk_hal::Api>().expect("Not a Vulkan device");
         let hal_tex = guard
             .texture_from_dmabuf_fd(fd, &hal_desc, &plane_info)
-            .expect(&format!("{label} DMA-BUF import failed"));
+            .unwrap_or_else(|e| panic!("{label} DMA-BUF import failed: {e:?}"));
         device.create_texture_from_hal::<vk_hal::Api>(hal_tex, &wgpu_desc)
     };
 
@@ -398,7 +399,7 @@ fn test_plane_import(
 
         // Check if it looks like a stride offset issue
         // If GPU row N matches CPU row N starting at a shifted offset, it's stride mismatch
-        let cpu_row1_start = offset as usize + stride as usize;
+        let _cpu_row1_start = offset as usize + stride as usize;
         let gpu_row1_start = aligned_bpr as usize;
         let shift_check_bytes = 32.min(row_bytes as usize);
 
@@ -430,6 +431,7 @@ fn test_plane_import(
 }
 
 /// Tests the production path: import DMA-BUF → copy to GPU texture → readback.
+#[allow(clippy::too_many_arguments)]
 fn test_plane_import_copy(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -490,7 +492,7 @@ fn test_plane_import_copy(
         let guard = device.as_hal::<vk_hal::Api>().expect("Not a Vulkan device");
         let hal_tex = guard
             .texture_from_dmabuf_fd(fd, &hal_desc, &plane_info)
-            .expect(&format!("{label} DMA-BUF import failed"));
+            .unwrap_or_else(|e| panic!("{label} DMA-BUF import failed: {e:?}"));
         device.create_texture_from_hal::<vk_hal::Api>(hal_tex, &import_desc)
     };
 

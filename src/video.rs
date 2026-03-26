@@ -11,7 +11,7 @@ use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Position in the media.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -227,7 +227,6 @@ pub(crate) struct Internal {
     pub(crate) bus: gst::Bus,
     pub(crate) source: gst::Pipeline,
     pub(crate) alive: Arc<AtomicBool>,
-    pub(crate) worker: Option<std::thread::JoinHandle<()>>,
 
     pub(crate) width: i32,
     pub(crate) height: i32,
@@ -368,20 +367,14 @@ impl Drop for Video {
     fn drop(&mut self) {
         let inner = self.0.get_mut().expect("failed to lock");
 
+        // Setting the pipeline to Null is synchronous and waits for any
+        // currently executing AppSink callbacks to finish.
         inner
             .source
             .set_state(gst::State::Null)
             .expect("failed to set state");
 
         inner.alive.store(false, Ordering::SeqCst);
-        if let Some(worker) = inner.worker.take()
-            && let Err(err) = worker.join()
-        {
-            match err.downcast_ref::<String>() {
-                Some(e) => error!(error = %e, "Video worker thread panicked"),
-                None => error!("Video worker thread panicked with unknown reason"),
-            }
-        }
     }
 }
 
@@ -559,118 +552,100 @@ impl Video {
         let alive = Arc::new(AtomicBool::new(true));
         let last_frame_time = Arc::new(Mutex::new(Instant::now()));
 
-        let frame_ref = Arc::clone(&frame);
-        let upload_frame_ref = Arc::clone(&upload_frame);
-        let alive_ref = Arc::clone(&alive);
-        let last_frame_time_ref = Arc::clone(&last_frame_time);
-
         let subtitle_text = Arc::new(Mutex::new(None));
         let upload_text = Arc::new(AtomicBool::new(false));
-        let subtitle_text_ref = Arc::clone(&subtitle_text);
-        let upload_text_ref = Arc::clone(&upload_text);
 
-        let pipeline_ref = pipeline.clone();
+        // Shared state for subtitle end-time tracking (cleared by video callback).
+        let clear_subtitles_at: Arc<Mutex<Option<gst::ClockTime>>> = Arc::new(Mutex::new(None));
 
-        let worker = std::thread::spawn(move || {
-            let mut clear_subtitles_at = None;
+        // --- Text sink callback (subtitles) ---
+        if let Some(ref text_sink) = text_sink {
+            let subtitle_text_ref = Arc::clone(&subtitle_text);
+            let upload_text_ref = Arc::clone(&upload_text);
+            let clear_at_ref = Arc::clone(&clear_subtitles_at);
 
-            while alive_ref.load(Ordering::Acquire) {
-                let loop_start = Instant::now();
-                match (|| -> Result<(), gst::FlowError> {
-                    let state = pipeline_ref.state(gst::ClockTime::ZERO).1;
-                    let sample = if state != gst::State::Playing {
-                        video_sink
-                            .try_pull_preroll(gst::ClockTime::from_mseconds(100))
-                            .ok_or(gst::FlowError::Eos)?
-                    } else {
-                        video_sink
-                            .try_pull_sample(gst::ClockTime::from_mseconds(100))
-                            .ok_or(gst::FlowError::Eos)?
-                    };
+            text_sink.set_callbacks(
+                gst_app::AppSinkCallbacks::builder()
+                    .new_sample(move |sink| {
+                        let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                        let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                        let text_pts = buffer.pts().ok_or(gst::FlowError::Error)?;
+                        let text_duration = buffer.duration().unwrap_or(gst::ClockTime::ZERO);
 
-                    *last_frame_time_ref
-                        .lock()
-                        .map_err(|_| gst::FlowError::Error)? = Instant::now();
+                        let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                        let text = std::str::from_utf8(map.as_slice())
+                            .map_err(|_| gst::FlowError::Error)?
+                            .to_string();
 
-                    let frame_segment = sample.segment().cloned().ok_or(gst::FlowError::Error)?;
-                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
-                    let frame_pts = buffer.pts().ok_or(gst::FlowError::Error)?;
-                    let frame_duration = buffer.duration().ok_or(gst::FlowError::Error)?;
-                    {
-                        let mut frame_guard =
-                            frame_ref.lock().map_err(|_| gst::FlowError::Error)?;
-                        *frame_guard = Frame(sample);
-                    }
-
-                    upload_frame_ref.swap(true, Ordering::SeqCst);
-
-                    if let Some(at) = clear_subtitles_at
-                        && frame_pts >= at
-                    {
-                        *subtitle_text_ref
-                            .lock()
-                            .map_err(|_| gst::FlowError::Error)? = None;
+                        if let Ok(mut guard) = subtitle_text_ref.lock() {
+                            *guard = Some(text);
+                        }
                         upload_text_ref.store(true, Ordering::SeqCst);
-                        clear_subtitles_at = None;
-                    }
 
-                    let text = text_sink
-                        .as_ref()
-                        .and_then(|sink| sink.try_pull_sample(gst::ClockTime::from_seconds(0)));
-                    if let Some(text) = text {
-                        let text_segment = text.segment().ok_or(gst::FlowError::Error)?;
-                        let text = text.buffer().ok_or(gst::FlowError::Error)?;
-                        let text_pts = text.pts().ok_or(gst::FlowError::Error)?;
-                        let text_duration = text.duration().ok_or(gst::FlowError::Error)?;
-
-                        let frame_running_time = frame_segment.to_running_time(frame_pts).value();
-                        let frame_running_time_end = frame_segment
-                            .to_running_time(frame_pts + frame_duration)
-                            .value();
-
-                        let text_running_time = text_segment.to_running_time(text_pts).value();
-                        let text_running_time_end = text_segment
-                            .to_running_time(text_pts + text_duration)
-                            .value();
-
-                        // see gst-plugins-base/ext/pango/gstbasetextoverlay.c (gst_base_text_overlay_video_chain)
-                        // as an example of how to correctly synchronize the text+video segments
-                        if text_running_time_end > frame_running_time
-                            && frame_running_time_end > text_running_time
-                        {
-                            let duration = text.duration().unwrap_or(gst::ClockTime::ZERO);
-                            let map = text.map_readable().map_err(|_| gst::FlowError::Error)?;
-
-                            let text = std::str::from_utf8(map.as_slice())
-                                .map_err(|_| gst::FlowError::Error)?
-                                .to_string();
-                            *subtitle_text_ref
-                                .lock()
-                                .map_err(|_| gst::FlowError::Error)? = Some(text);
-                            upload_text_ref.store(true, Ordering::SeqCst);
-
-                            clear_subtitles_at = Some(text_pts + duration);
+                        if let Ok(mut guard) = clear_at_ref.lock() {
+                            *guard = Some(text_pts + text_duration);
                         }
-                    }
 
-                    Ok(())
-                })() {
-                    Ok(()) => {}
-                    Err(gst::FlowError::Eos) => {
-                        // try_pull_preroll returns instantly when paused after EOS
-                        // (GStreamer doesn't block on the timeout). Sleep to avoid
-                        // spinning the CPU.
-                        let elapsed = loop_start.elapsed();
-                        if elapsed < Duration::from_millis(50) {
-                            std::thread::sleep(Duration::from_millis(100) - elapsed);
-                        }
-                    }
-                    Err(_) => {
-                        error!("Error pulling frame from GStreamer pipeline");
-                    }
+                        Ok(gst::FlowSuccess::Ok)
+                    })
+                    .build(),
+            );
+        }
+
+        // --- Video sink callbacks (frame delivery) ---
+        {
+            let frame_ref = Arc::clone(&frame);
+            let upload_frame_ref = Arc::clone(&upload_frame);
+            let last_frame_time_ref = Arc::clone(&last_frame_time);
+            let subtitle_text_ref = Arc::clone(&subtitle_text);
+            let upload_text_ref = Arc::clone(&upload_text);
+            let clear_at_ref = Arc::clone(&clear_subtitles_at);
+
+            let handle_sample = move |sink: &gst_app::AppSink,
+                                      is_preroll: bool|
+                  -> Result<gst::FlowSuccess, gst::FlowError> {
+                let sample = if is_preroll {
+                    sink.pull_preroll().map_err(|_| gst::FlowError::Eos)?
+                } else {
+                    sink.pull_sample().map_err(|_| gst::FlowError::Eos)?
+                };
+
+                if let Ok(mut guard) = last_frame_time_ref.lock() {
+                    *guard = Instant::now();
                 }
-            }
-        });
+
+                // Check if current frame is past subtitle end time → clear subtitle.
+                if let Some(buffer) = sample.buffer()
+                    && let Some(frame_pts) = buffer.pts()
+                    && let Ok(mut clear_guard) = clear_at_ref.lock()
+                    && let Some(at) = *clear_guard
+                    && frame_pts >= at
+                {
+                    if let Ok(mut sub) = subtitle_text_ref.lock() {
+                        *sub = None;
+                    }
+                    upload_text_ref.store(true, Ordering::SeqCst);
+                    *clear_guard = None;
+                }
+
+                if let Ok(mut frame_guard) = frame_ref.lock() {
+                    *frame_guard = Frame(sample);
+                }
+                upload_frame_ref.store(true, Ordering::SeqCst);
+
+                Ok(gst::FlowSuccess::Ok)
+            };
+
+            let handle_sample_new = handle_sample.clone();
+            let handle_sample_preroll = handle_sample;
+
+            video_sink.set_callbacks(
+                gst_app::AppSinkCallbacks::builder()
+                    .new_sample(move |sink| handle_sample_new(sink, false))
+                    .new_preroll(move |sink| handle_sample_preroll(sink, true))
+                    .build(),
+            );
+        }
 
         Ok(Video(RwLock::new(Internal {
             id,
@@ -678,7 +653,6 @@ impl Video {
             bus: pipeline.bus().unwrap(),
             source: pipeline,
             alive,
-            worker: Some(worker),
 
             width,
             height,

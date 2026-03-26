@@ -6,6 +6,13 @@ use iced_video_player::{Video, VideoPlayer};
 use std::time::Duration;
 
 fn main() -> iced::Result {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "iced_video_player=info".into()),
+        )
+        .init();
+
     iced::run(App::update, App::view)
 }
 

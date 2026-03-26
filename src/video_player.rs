@@ -5,9 +5,9 @@ use iced::{
     advanced::{self, Widget, layout, widget},
 };
 use iced_wgpu::primitive::Renderer as PrimitiveRenderer;
-use log::error;
 use std::{marker::PhantomData, sync::atomic::Ordering, time::Duration};
 use std::{sync::Arc, time::Instant};
+use tracing::error;
 
 /// Video player widget which displays the current frame of a [`Video`](crate::Video).
 pub struct VideoPlayer<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer>
@@ -182,6 +182,11 @@ where
         let drawing_bounds = iced::Rectangle::new(position, final_size);
 
         let upload_frame = inner.upload_frame.swap(false, Ordering::SeqCst);
+        if upload_frame {
+            // Reset notification flag so update() can publish on_new_frame
+            // again for the next frame.
+            inner.frame_notified.store(false, Ordering::SeqCst);
+        }
 
         if upload_frame {
             let last_frame_time = inner
@@ -272,10 +277,17 @@ where
                     inner.set_paused(true);
                 }
 
-                if inner.upload_frame.load(Ordering::SeqCst)
-                    && let Some(on_new_frame) = self.on_new_frame.clone()
-                {
-                    shell.publish(on_new_frame);
+                let has_new_frame = inner.upload_frame.load(Ordering::SeqCst);
+                // Only publish on_new_frame once per actual video frame.
+                // frame_notified is cleared by draw() when it consumes
+                // upload_frame, preventing duplicate messages.
+                let already_notified = inner.frame_notified.load(Ordering::SeqCst);
+
+                if has_new_frame && !already_notified {
+                    inner.frame_notified.store(true, Ordering::SeqCst);
+                    if let Some(on_new_frame) = self.on_new_frame.clone() {
+                        shell.publish(on_new_frame);
+                    }
                 }
 
                 if let Some(on_subtitle_text) = &self.on_subtitle_text
@@ -285,11 +297,29 @@ where
                     shell.publish(on_subtitle_text(text.clone()));
                 }
 
-                shell.request_redraw();
+                if has_new_frame && !already_notified {
+                    // New frame ready — redraw immediately to display it.
+                    shell.request_redraw();
+                } else {
+                    // No new frame yet — check again at roughly the next frame time.
+                    let frame_interval_ms = if inner.framerate > 0.0 {
+                        1000.0 / inner.framerate
+                    } else {
+                        40.0
+                    };
+                    shell.request_redraw_at(iced::window::RedrawRequest::At(
+                        Instant::now() + Duration::from_millis(frame_interval_ms as u64),
+                    ));
+                }
             } else {
-                shell.request_redraw_at(iced::window::RedrawRequest::At(
-                    Instant::now() + Duration::from_millis(32),
-                ));
+                // Paused or EOS — only wake when a new frame appears (e.g. seek).
+                if inner.upload_frame.load(Ordering::SeqCst) {
+                    shell.request_redraw();
+                } else {
+                    shell.request_redraw_at(iced::window::RedrawRequest::At(
+                        Instant::now() + Duration::from_millis(250),
+                    ));
+                }
             }
         }
     }

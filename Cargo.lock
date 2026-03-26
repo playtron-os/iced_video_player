@@ -38,6 +38,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -134,7 +143,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -758,7 +767,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "cryoglyph"
 version = "0.1.0"
-source = "git+https://github.com/playtron-os/cryoglyph.git?rev=8337ead#8337ead2dacd58b9cf3f2c60884fadef7c39810b"
+source = "git+https://github.com/playtron-os/cryoglyph.git?rev=3196496#31964966a88f9acfc45faf8a48514219342c2aa3"
 dependencies = [
  "cosmic-text",
  "etagere",
@@ -833,7 +842,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/playtron-os/winit.git?rev=076e79ab#076e79ab52c31c176cb00a273a7a2b1a09654ed9"
+source = "git+https://github.com/playtron-os/winit.git?rev=dd5964a4#dd5964a4ca20525614b11b527fcbcf9ace852a24"
 
 [[package]]
 name = "either"
@@ -1374,7 +1383,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.58.0",
+ "windows",
 ]
 
 [[package]]
@@ -1420,6 +1429,32 @@ dependencies = [
  "pin-project-lite",
  "smallvec",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "gstreamer-allocators"
+version = "0.23.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45f3c36aa5bc98e5dbfd19a27536373167ab1ad734ffafb84d5d65203fe75208"
+dependencies = [
+ "glib",
+ "gstreamer",
+ "gstreamer-allocators-sys",
+ "libc",
+ "once_cell",
+]
+
+[[package]]
+name = "gstreamer-allocators-sys"
+version = "0.23.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c005b6cfae0c7e97b0ea95921f561fc8a8786b734cec25c29363a52305074a10"
+dependencies = [
+ "glib-sys",
+ "gobject-sys",
+ "gstreamer-sys",
+ "libc",
+ "system-deps",
 ]
 
 [[package]]
@@ -1602,7 +1637,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 [[package]]
 name = "iced"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "iced_core",
  "iced_debug",
@@ -1618,7 +1653,7 @@ dependencies = [
 [[package]]
 name = "iced_core"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "bitflags 2.11.0",
  "bytes",
@@ -1635,7 +1670,7 @@ dependencies = [
 [[package]]
 name = "iced_debug"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "iced_core",
  "iced_futures",
@@ -1645,7 +1680,7 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "futures",
  "iced_core",
@@ -1658,7 +1693,7 @@ dependencies = [
 [[package]]
 name = "iced_graphics"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
@@ -1678,7 +1713,7 @@ dependencies = [
 [[package]]
 name = "iced_program"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "iced_graphics",
  "iced_runtime",
@@ -1687,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "iced_renderer"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -1699,7 +1734,7 @@ dependencies = [
 [[package]]
 name = "iced_runtime"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "bytes",
  "iced_core",
@@ -1711,7 +1746,7 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -1730,20 +1765,24 @@ version = "0.6.0"
 dependencies = [
  "glib",
  "gstreamer",
+ "gstreamer-allocators",
  "gstreamer-app",
  "gstreamer-base",
  "gstreamer-video",
  "iced",
  "iced_wgpu",
- "log",
+ "libc",
+ "pollster",
  "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
 [[package]]
 name = "iced_wgpu"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
@@ -1762,7 +1801,7 @@ dependencies = [
 [[package]]
 name = "iced_widget"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "iced_renderer",
  "log",
@@ -1775,7 +1814,7 @@ dependencies = [
 [[package]]
 name = "iced_winit"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=e84471cd#e84471cd8363285a9a3eb35d6f5303c21255b6d1"
+source = "git+https://github.com/playtron-os/iced.git?rev=708f125c#708f125c84ed7e6f67a12ea32740dd48a1d3734b"
 dependencies = [
  "arboard",
  "iced_debug",
@@ -2056,6 +2095,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2190,6 +2235,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
+]
+
+[[package]]
 name = "maybe-rayon"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2285,7 +2339,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows 0.62.2",
+ "windows",
  "zbus",
 ]
 
@@ -2297,9 +2351,8 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "naga"
-version = "28.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "618f667225063219ddfc61251087db8a9aec3c3f0950c916b614e403486f1135"
+version = "28.0.1"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -2371,6 +2424,15 @@ name = "noop_proc_macro"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "num-bigint"
@@ -2855,7 +2917,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3006,6 +3068,12 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "portable-atomic"
@@ -3310,6 +3378,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-automata"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-syntax"
+version = "0.8.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3478,6 +3563,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8bbf91e5a4d6315eee45e704372590b30e260ee83af6639d64557f51b067776"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
 ]
 
 [[package]]
@@ -3780,6 +3874,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread_local"
+version = "1.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "tiff"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3945,6 +4048,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+ "valuable",
+]
+
+[[package]]
+name = "tracing-log"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
+dependencies = [
+ "matchers",
+ "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
+ "sharded-slab",
+ "smallvec",
+ "thread_local",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
 ]
 
 [[package]]
@@ -4059,6 +4192,12 @@ dependencies = [
  "num-traits",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "valuable"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "version-compare"
@@ -4344,9 +4483,8 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "wgpu"
-version = "28.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9cb534d5ffd109c7d1135f34cdae29e60eab94855a625dcfe1705f8bc7ad79f"
+version = "28.0.1"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
@@ -4375,8 +4513,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "28.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d23f4642f53f666adcfd2d3218ab174d1e6681101aef18696b90cbe64d1c10f9"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -4406,27 +4543,24 @@ dependencies = [
 
 [[package]]
 name = "wgpu-core-deps-apple"
-version = "28.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87b7b696b918f337c486bf93142454080a32a37832ba8a31e4f48221890047da"
+version = "28.0.1"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "wgpu-hal",
 ]
 
 [[package]]
 name = "wgpu-core-deps-emscripten"
-version = "28.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34b251c331f84feac147de3c4aa3aa45112622a95dd7ee1b74384fa0458dbd79"
+version = "28.0.1"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "wgpu-hal",
 ]
 
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
-version = "28.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ca976e72b2c9964eb243e281f6ce7f14a514e409920920dcda12ae40febaae"
+version = "28.0.1"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "wgpu-hal",
 ]
@@ -4434,8 +4568,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "28.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44d6cb474beb218824dcc9e1ce679d973f719262789bfb27407da560cac20eeb"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -4475,15 +4608,14 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "wgpu-types",
- "windows 0.62.2",
- "windows-core 0.62.2",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]
 name = "wgpu-types"
-version = "28.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e18308757e594ed2cd27dddbb16a139c42a683819d32a2e0b1b0167552f5840c"
+version = "28.0.1"
+source = "git+https://github.com/playtron-os/wgpu.git?rev=3bcea5903#3bcea590327f479e7a90a85581655970a65ec058"
 dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
@@ -4503,22 +4635,12 @@ dependencies = [
 
 [[package]]
 name = "windows"
-version = "0.58.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd04d41d93c4992d421894c18c8b43496aa748dd4c081bac0dc93eb0489272b6"
-dependencies = [
- "windows-core 0.58.0",
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows"
 version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
 dependencies = [
  "windows-collections",
- "windows-core 0.62.2",
+ "windows-core",
  "windows-future",
  "windows-numerics",
 ]
@@ -4529,20 +4651,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
 dependencies = [
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.58.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ba6d44ec8c2591c134257ce647b7ea6b20335bf6379a27dac5f1641fcf59f99"
-dependencies = [
- "windows-implement 0.58.0",
- "windows-interface 0.58.0",
- "windows-result 0.2.0",
- "windows-strings 0.1.0",
- "windows-targets 0.52.6",
+ "windows-core",
 ]
 
 [[package]]
@@ -4551,11 +4660,11 @@ version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
- "windows-implement 0.60.2",
- "windows-interface 0.59.3",
+ "windows-implement",
+ "windows-interface",
  "windows-link",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
+ "windows-result",
+ "windows-strings",
 ]
 
 [[package]]
@@ -4564,20 +4673,9 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
 dependencies = [
- "windows-core 0.62.2",
+ "windows-core",
  "windows-link",
  "windows-threading",
-]
-
-[[package]]
-name = "windows-implement"
-version = "0.58.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bbd5b46c938e506ecbce286b6628a02171d56153ba733b6c741fc627ec9579b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -4585,17 +4683,6 @@ name = "windows-implement"
 version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "windows-interface"
-version = "0.58.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053c4c462dc91d3b1504c6fe5a726dd15e216ba718e84a0e46a88fbe5ded3515"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4625,17 +4712,8 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
- "windows-core 0.62.2",
+ "windows-core",
  "windows-link",
-]
-
-[[package]]
-name = "windows-result"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d1043d8214f791817bab27572aaa8af63732e11bf84aa21a45a78d6c317ae0e"
-dependencies = [
- "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -4645,16 +4723,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "windows-strings"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd9b125c486025df0eabcb585e62173c6c9eddcec5d117d3b6e8c30e2ee4d10"
-dependencies = [
- "windows-result 0.2.0",
- "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -4835,7 +4903,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.12"
-source = "git+https://github.com/playtron-os/winit.git?rev=076e79ab#076e79ab52c31c176cb00a273a7a2b1a09654ed9"
+source = "git+https://github.com/playtron-os/winit.git?rev=dd5964a4#dd5964a4ca20525614b11b527fcbcf9ace852a24"
 dependencies = [
  "ahash",
  "android-activity",

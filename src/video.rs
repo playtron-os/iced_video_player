@@ -1,14 +1,17 @@
 use crate::Error;
 use gstreamer as gst;
+use gstreamer_allocators::DmaBufMemory;
 use gstreamer_app as gst_app;
 use gstreamer_app::prelude::*;
 use gstreamer_video::VideoMeta;
 use iced::widget::image as img;
 use std::num::NonZeroU8;
 use std::ops::{Deref, DerefMut};
+use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use tracing::{debug, error, info};
 
 /// Position in the media.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -50,6 +53,11 @@ impl Frame {
         Self(gst::Sample::builder().build())
     }
 
+    /// Get a clone of the underlying GStreamer sample (reference-counted).
+    pub fn sample(&self) -> gst::Sample {
+        self.0.clone()
+    }
+
     pub fn readable(&'_ self) -> Option<gst::BufferMap<'_, gst::buffer::Readable>> {
         self.0.buffer().and_then(|x| x.map_readable().ok())
     }
@@ -63,6 +71,153 @@ impl Frame {
                 .map(|meta| meta.stride()[0] as u32)
         })
     }
+
+    /// Check if this frame's buffer is backed by DMA-BUF memory.
+    ///
+    /// Returns `true` if at least the first memory block is a DMA-BUF.
+    /// For NV12, hardware decoders may provide 1 DMA-BUF (both planes) or
+    /// 2 DMA-BUFs (one per plane).
+    pub fn is_dmabuf(&self) -> bool {
+        self.0
+            .buffer()
+            .map(|buf| {
+                buf.n_memory() > 0
+                    && buf
+                        .peek_memory(0)
+                        .downcast_memory_ref::<DmaBufMemory>()
+                        .is_some()
+            })
+            .unwrap_or(false)
+    }
+
+    /// Extract DMA-BUF file descriptors and plane layout for NV12.
+    ///
+    /// Returns duplicated file descriptors (caller owns them) together with
+    /// stride, offset, and DRM modifier information needed for Vulkan import.
+    pub fn dmabuf_fds(&self) -> Option<DmaBufPlanes> {
+        let buffer = self.0.buffer()?;
+        let n = buffer.n_memory();
+        if n == 0 {
+            return None;
+        }
+
+        let mem0 = buffer.peek_memory(0);
+        let dmabuf0 = mem0.downcast_memory_ref::<DmaBufMemory>()?;
+        let fd0 = dmabuf0.fd();
+
+        // Get stride/offset from GstVideoMeta (attached by cudadmabufupload).
+        let video_meta = buffer.meta::<VideoMeta>();
+        let (y_stride, uv_stride, y_offset, uv_offset) = if let Some(meta) = video_meta {
+            let strides = meta.stride();
+            let offsets = meta.offset();
+            (
+                strides.first().copied().unwrap_or(0) as u32,
+                strides.get(1).copied().unwrap_or(0) as u32,
+                offsets.first().copied().unwrap_or(0) as u32,
+                offsets.get(1).copied().unwrap_or(0) as u32,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        // Parse DRM modifier from caps drm-format field: "NV12:0x..."
+        let drm_modifier = self
+            .0
+            .caps()
+            .and_then(|caps| {
+                let s = caps.structure(0)?;
+                let drm_fmt = s.get::<&str>("drm-format").ok()?;
+                let hex = drm_fmt.split(':').nth(1)?;
+                u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
+            })
+            .unwrap_or(0);
+
+        if n >= 2 {
+            // Separate DMA-BUF per plane
+            let mem1 = buffer.peek_memory(1);
+            if let Some(dmabuf1) = mem1.downcast_memory_ref::<DmaBufMemory>() {
+                let y_fd = unsafe { libc::dup(fd0) };
+                let uv_fd = unsafe { libc::dup(dmabuf1.fd()) };
+                if y_fd < 0 || uv_fd < 0 {
+                    if y_fd >= 0 {
+                        unsafe { libc::close(y_fd) };
+                    }
+                    if uv_fd >= 0 {
+                        unsafe { libc::close(uv_fd) };
+                    }
+                    return None;
+                }
+                return Some(DmaBufPlanes {
+                    y_fd,
+                    uv_fd,
+                    drm_modifier,
+                    y_stride,
+                    uv_stride,
+                    y_offset,
+                    uv_offset,
+                });
+            }
+        }
+
+        // Single DMA-BUF with both planes
+        let y_fd = unsafe { libc::dup(fd0) };
+        let uv_fd = unsafe { libc::dup(fd0) };
+        if y_fd < 0 || uv_fd < 0 {
+            if y_fd >= 0 {
+                unsafe { libc::close(y_fd) };
+            }
+            if uv_fd >= 0 {
+                unsafe { libc::close(uv_fd) };
+            }
+            return None;
+        }
+        Some(DmaBufPlanes {
+            y_fd,
+            uv_fd,
+            drm_modifier,
+            y_stride,
+            uv_stride,
+            y_offset,
+            uv_offset,
+        })
+    }
+
+    /// Debug information about buffer memory types (for logging).
+    pub fn debug_memory_info(&self) -> String {
+        match self.0.buffer() {
+            Some(buf) => {
+                let n = buf.n_memory();
+                let mut types = Vec::new();
+                for i in 0..n {
+                    let mem = buf.peek_memory(i);
+                    let is_dmabuf = mem.downcast_memory_ref::<DmaBufMemory>().is_some();
+                    types.push(format!("mem[{i}]: dmabuf={is_dmabuf}"));
+                }
+                format!("n_memory={n}, {}", types.join(", "))
+            }
+            None => "no buffer".to_string(),
+        }
+    }
+}
+
+/// DMA-BUF file descriptors and layout for NV12 Y and UV planes.
+///
+/// The fds are duplicated and owned by this struct. Vulkan will take ownership
+/// when importing, so they must NOT be closed manually after import.
+#[derive(Debug)]
+pub(crate) struct DmaBufPlanes {
+    pub y_fd: RawFd,
+    pub uv_fd: RawFd,
+    /// DRM format modifier (0 = linear).
+    pub drm_modifier: u64,
+    /// Row stride for Y plane in bytes.
+    pub y_stride: u32,
+    /// Row stride for UV plane in bytes.
+    pub uv_stride: u32,
+    /// Byte offset of Y plane within its DMA-BUF.
+    pub y_offset: u32,
+    /// Byte offset of UV plane within its DMA-BUF.
+    pub uv_offset: u32,
 }
 
 #[derive(Debug)]
@@ -83,6 +238,10 @@ pub(crate) struct Internal {
 
     pub(crate) frame: Arc<Mutex<Frame>>,
     pub(crate) upload_frame: Arc<AtomicBool>,
+    /// Set to `true` by update() after publishing on_new_frame.
+    /// Cleared by draw() when it consumes upload_frame.
+    /// Prevents duplicate NewFrame messages per actual video frame.
+    pub(crate) frame_notified: Arc<AtomicBool>,
     pub(crate) last_frame_time: Arc<Mutex<Instant>>,
     pub(crate) looping: bool,
     pub(crate) is_eos: bool,
@@ -219,8 +378,8 @@ impl Drop for Video {
             && let Err(err) = worker.join()
         {
             match err.downcast_ref::<String>() {
-                Some(e) => log::error!("Video thread panicked: {e}"),
-                None => log::error!("Video thread panicked with unknown reason"),
+                Some(e) => error!(error = %e, "Video worker thread panicked"),
+                None => error!("Video worker thread panicked with unknown reason"),
             }
         }
     }
@@ -229,32 +388,110 @@ impl Drop for Video {
 impl Video {
     /// Create a new video player from a given video which loads from `uri`.
     /// Note that live sources will report the duration to be zero.
+    ///
+    /// Attempts a DMA-BUF zero-copy pipeline first (no `videoconvert`, hardware
+    /// decoders can pass DMA-BUF NV12 directly). Falls back to CPU-copy pipeline
+    /// with `videoconvert` if the DMA-BUF pipeline fails to negotiate.
     pub fn new(uri: &url::Url) -> Result<Self, Error> {
         gst::init()?;
 
-        let pipeline = format!(
+        // Pipeline priority:
+        // 1. NVIDIA CUDA → DMA-BUF zero-copy (nvh264dec → cudadmabufupload → appsink)
+        // 2. Generic DMA-BUF (VA-API decoders produce DMA-BUF directly)
+        // 3. CPU fallback (videoconvert → system memory NV12)
+
+        // Try NVIDIA CUDA → DMA-BUF pipeline (cudadmabufupload converts CUDA memory to DMA-BUF)
+        let nvidia_pipeline = format!(
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"cudadmabufupload force-linear=true ! appsink name=iced_video drop=true\"",
+            uri.as_str()
+        );
+        match Self::try_launch_playbin(&nvidia_pipeline) {
+            Ok(video) => {
+                info!("Using NVIDIA CUDA→DMA-BUF zero-copy pipeline");
+                return Ok(video);
+            }
+            Err(e) => {
+                debug!(error = %e, "NVIDIA DMA-BUF pipeline not available, trying next");
+            }
+        }
+
+        // Try generic DMA-BUF pipeline (VA-API decoders on Intel/AMD)
+        let dmabuf_pipeline = format!(
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"appsink name=iced_video drop=true caps=video/x-raw(memory:DMABuf),format=NV12,pixel-aspect-ratio=1/1;video/x-raw,format=NV12,pixel-aspect-ratio=1/1\"",
+            uri.as_str()
+        );
+        match Self::try_launch_playbin(&dmabuf_pipeline) {
+            Ok(video) => {
+                info!("Using DMA-BUF-capable pipeline");
+                return Ok(video);
+            }
+            Err(e) => {
+                debug!(error = %e, "DMA-BUF pipeline not available, trying next");
+            }
+        }
+
+        // Fallback: CPU copy with videoconvert
+        info!("Falling back to CPU-copy pipeline");
+        let cpu_pipeline = format!(
             "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"videoscale ! videoconvert ! appsink name=iced_video drop=true caps=video/x-raw,format=NV12,pixel-aspect-ratio=1/1\"",
             uri.as_str()
         );
-        let pipeline = gst::parse::launch(pipeline.as_ref())?
+        Self::try_launch_playbin(&cpu_pipeline)
+    }
+
+    /// Try to launch a playbin pipeline string and wire up sinks.
+    fn try_launch_playbin(pipeline_str: &str) -> Result<Self, Error> {
+        let pipeline = gst::parse::launch(pipeline_str)?
             .downcast::<gst::Pipeline>()
             .map_err(|_| Error::Cast)?;
 
+        // Extract the video appsink from the video-sink property.
+        // gst_parse wraps element descriptions in a GstBin with ghost pads,
+        // so we first try the Bin path, then fall back to direct downcast.
         let video_sink: gst::Element = pipeline.property("video-sink");
-        let pad = video_sink.pads().first().cloned().unwrap();
-        let pad = pad.dynamic_cast::<gst::GhostPad>().unwrap();
-        let bin = pad
-            .parent_element()
-            .unwrap()
-            .downcast::<gst::Bin>()
-            .unwrap();
-        let video_sink = bin.by_name("iced_video").unwrap();
-        let video_sink = video_sink.downcast::<gst_app::AppSink>().unwrap();
+        let video_sink = Self::find_appsink(&video_sink, "iced_video")?;
 
         let text_sink: gst::Element = pipeline.property("text-sink");
-        let text_sink = text_sink.downcast::<gst_app::AppSink>().unwrap();
+        let text_sink = Self::find_appsink(&text_sink, "iced_text")?;
 
         Self::from_gst_pipeline(pipeline, video_sink, Some(text_sink))
+    }
+
+    /// Find a named AppSink inside an element that may be a Bin wrapper.
+    fn find_appsink(element: &gst::Element, name: &str) -> Result<gst_app::AppSink, Error> {
+        // Direct name match — element itself is the appsink.
+        if element.name().as_str() == name {
+            return element
+                .clone()
+                .downcast::<gst_app::AppSink>()
+                .map_err(|_| Error::Cast);
+        }
+
+        // The element may be a Bin (gst_parse wraps multi-element pipelines).
+        if let Ok(bin) = element.clone().downcast::<gst::Bin>() {
+            if let Some(found) = bin.by_name(name) {
+                return found
+                    .downcast::<gst_app::AppSink>()
+                    .map_err(|_| Error::Cast);
+            }
+        }
+
+        // Try ghost pad parent — gst_parse wraps single elements too.
+        if let Some(pad) = element.pads().first() {
+            if let Ok(ghost) = pad.clone().dynamic_cast::<gst::GhostPad>() {
+                if let Some(parent) = ghost.parent_element() {
+                    if let Ok(bin) = parent.downcast::<gst::Bin>() {
+                        if let Some(found) = bin.by_name(name) {
+                            return found
+                                .downcast::<gst_app::AppSink>()
+                                .map_err(|_| Error::Cast);
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(Error::AppSink(name.to_string()))
     }
 
     /// Creates a new video based on an existing GStreamer pipeline and appsink.
@@ -341,17 +578,18 @@ impl Video {
             let mut clear_subtitles_at = None;
 
             while alive_ref.load(Ordering::Acquire) {
-                if let Err(gst::FlowError::Error) = (|| -> Result<(), gst::FlowError> {
-                    let sample =
-                        if pipeline_ref.state(gst::ClockTime::ZERO).1 != gst::State::Playing {
-                            video_sink
-                                .try_pull_preroll(gst::ClockTime::from_mseconds(16))
-                                .ok_or(gst::FlowError::Eos)?
-                        } else {
-                            video_sink
-                                .try_pull_sample(gst::ClockTime::from_mseconds(16))
-                                .ok_or(gst::FlowError::Eos)?
-                        };
+                let loop_start = Instant::now();
+                match (|| -> Result<(), gst::FlowError> {
+                    let state = pipeline_ref.state(gst::ClockTime::ZERO).1;
+                    let sample = if state != gst::State::Playing {
+                        video_sink
+                            .try_pull_preroll(gst::ClockTime::from_mseconds(100))
+                            .ok_or(gst::FlowError::Eos)?
+                    } else {
+                        video_sink
+                            .try_pull_sample(gst::ClockTime::from_mseconds(100))
+                            .ok_or(gst::FlowError::Eos)?
+                    };
 
                     *last_frame_time_ref
                         .lock()
@@ -420,7 +658,19 @@ impl Video {
 
                     Ok(())
                 })() {
-                    log::error!("error pulling frame");
+                    Ok(()) => {}
+                    Err(gst::FlowError::Eos) => {
+                        // try_pull_preroll returns instantly when paused after EOS
+                        // (GStreamer doesn't block on the timeout). Sleep to avoid
+                        // spinning the CPU.
+                        let elapsed = loop_start.elapsed();
+                        if elapsed < Duration::from_millis(50) {
+                            std::thread::sleep(Duration::from_millis(100) - elapsed);
+                        }
+                    }
+                    Err(_) => {
+                        error!("Error pulling frame from GStreamer pipeline");
+                    }
                 }
             }
         });
@@ -442,6 +692,7 @@ impl Video {
 
             frame,
             upload_frame,
+            frame_notified: Arc::new(AtomicBool::new(false)),
             last_frame_time,
             looping: false,
             is_eos: false,

@@ -73,4 +73,6 @@ pub enum Error {
     Lock,
     #[error("invalid framerate: {0}")]
     Framerate(f64),
+    #[error("timed out waiting for frame")]
+    Timeout,
 }

@@ -46,26 +46,33 @@ impl From<u64> for Position {
 }
 
 #[derive(Debug)]
-pub(crate) struct Frame(gst::Sample);
+pub(crate) struct Frame {
+    sample: gst::Sample,
+    /// When this frame was received from GStreamer.
+    pub received_at: Instant,
+}
 
 impl Frame {
     pub fn empty() -> Self {
-        Self(gst::Sample::builder().build())
+        Self {
+            sample: gst::Sample::builder().build(),
+            received_at: Instant::now(),
+        }
     }
 
     /// Get a clone of the underlying GStreamer sample (reference-counted).
     pub fn sample(&self) -> gst::Sample {
-        self.0.clone()
+        self.sample.clone()
     }
 
     pub fn readable(&'_ self) -> Option<gst::BufferMap<'_, gst::buffer::Readable>> {
-        self.0.buffer().and_then(|x| x.map_readable().ok())
+        self.sample.buffer().and_then(|x| x.map_readable().ok())
     }
 
     /// Get the Y-plane stride (line pitch) in bytes from the frame's VideoMeta.
     /// This is critical for proper NV12 decoding, as the stride may differ from width.
     pub fn stride(&self) -> Option<u32> {
-        self.0.buffer().and_then(|buffer| {
+        self.sample.buffer().and_then(|buffer| {
             buffer
                 .meta::<VideoMeta>()
                 .map(|meta| meta.stride()[0] as u32)
@@ -78,7 +85,7 @@ impl Frame {
     /// For NV12, hardware decoders may provide 1 DMA-BUF (both planes) or
     /// 2 DMA-BUFs (one per plane).
     pub fn is_dmabuf(&self) -> bool {
-        self.0
+        self.sample
             .buffer()
             .map(|buf| {
                 buf.n_memory() > 0
@@ -95,7 +102,7 @@ impl Frame {
     /// Returns duplicated file descriptors (caller owns them) together with
     /// stride, offset, and DRM modifier information needed for Vulkan import.
     pub fn dmabuf_fds(&self) -> Option<DmaBufPlanes> {
-        let buffer = self.0.buffer()?;
+        let buffer = self.sample.buffer()?;
         let n = buffer.n_memory();
         if n == 0 {
             return None;
@@ -122,7 +129,7 @@ impl Frame {
 
         // Parse DRM modifier from caps drm-format field: "NV12:0x..."
         let drm_modifier = self
-            .0
+            .sample
             .caps()
             .and_then(|caps| {
                 let s = caps.structure(0)?;
@@ -136,20 +143,11 @@ impl Frame {
             // Separate DMA-BUF per plane
             let mem1 = buffer.peek_memory(1);
             if let Some(dmabuf1) = mem1.downcast_memory_ref::<DmaBufMemory>() {
-                let y_fd = unsafe { libc::dup(fd0) };
-                let uv_fd = unsafe { libc::dup(dmabuf1.fd()) };
-                if y_fd < 0 || uv_fd < 0 {
-                    if y_fd >= 0 {
-                        unsafe { libc::close(y_fd) };
-                    }
-                    if uv_fd >= 0 {
-                        unsafe { libc::close(uv_fd) };
-                    }
-                    return None;
-                }
+                let y_guard = FdGuard::new(unsafe { libc::dup(fd0) })?;
+                let uv_guard = FdGuard::new(unsafe { libc::dup(dmabuf1.fd()) })?;
                 return Some(DmaBufPlanes {
-                    y_fd,
-                    uv_fd,
+                    y_fd: y_guard.take(),
+                    uv_fd: uv_guard.take(),
                     drm_modifier,
                     y_stride,
                     uv_stride,
@@ -160,20 +158,11 @@ impl Frame {
         }
 
         // Single DMA-BUF with both planes
-        let y_fd = unsafe { libc::dup(fd0) };
-        let uv_fd = unsafe { libc::dup(fd0) };
-        if y_fd < 0 || uv_fd < 0 {
-            if y_fd >= 0 {
-                unsafe { libc::close(y_fd) };
-            }
-            if uv_fd >= 0 {
-                unsafe { libc::close(uv_fd) };
-            }
-            return None;
-        }
+        let y_guard = FdGuard::new(unsafe { libc::dup(fd0) })?;
+        let uv_guard = FdGuard::new(unsafe { libc::dup(fd0) })?;
         Some(DmaBufPlanes {
-            y_fd,
-            uv_fd,
+            y_fd: y_guard.take(),
+            uv_fd: uv_guard.take(),
             drm_modifier,
             y_stride,
             uv_stride,
@@ -184,7 +173,7 @@ impl Frame {
 
     /// Debug information about buffer memory types (for logging).
     pub fn debug_memory_info(&self) -> String {
-        match self.0.buffer() {
+        match self.sample.buffer() {
             Some(buf) => {
                 let n = buf.n_memory();
                 let mut types = Vec::new();
@@ -220,6 +209,35 @@ pub(crate) struct DmaBufPlanes {
     pub uv_offset: u32,
 }
 
+/// RAII wrapper for a raw file descriptor. Closes the fd on drop.
+///
+/// Use [`.take()`](FdGuard::take) to transfer ownership (e.g., to Vulkan
+/// import) without closing.
+pub(crate) struct FdGuard(RawFd);
+
+impl FdGuard {
+    /// Wrap a duplicated file descriptor. Returns `None` if `fd < 0` (dup failed).
+    pub fn new(fd: RawFd) -> Option<Self> {
+        if fd < 0 { None } else { Some(Self(fd)) }
+    }
+
+    /// Transfer ownership of the fd out of the guard.
+    /// The guard will no longer close the fd on drop.
+    pub fn take(mut self) -> RawFd {
+        let fd = self.0;
+        self.0 = -1;
+        fd
+    }
+}
+
+impl Drop for FdGuard {
+    fn drop(&mut self) {
+        if self.0 >= 0 {
+            unsafe { libc::close(self.0) };
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Internal {
     pub(crate) id: u64,
@@ -241,7 +259,6 @@ pub(crate) struct Internal {
     /// Cleared by draw() when it consumes upload_frame.
     /// Prevents duplicate NewFrame messages per actual video frame.
     pub(crate) frame_notified: Arc<AtomicBool>,
-    pub(crate) last_frame_time: Arc<Mutex<Instant>>,
     pub(crate) looping: bool,
     pub(crate) is_eos: bool,
     pub(crate) restart_stream: bool,
@@ -254,7 +271,13 @@ pub(crate) struct Internal {
 
 impl Internal {
     pub(crate) fn seek(&self, position: impl Into<Position>, accurate: bool) -> Result<(), Error> {
-        let position = position.into();
+        let position = match position.into() {
+            // Clamp time-based seeks to duration to avoid GStreamer errors.
+            Position::Time(t) if !self.duration.is_zero() && t > self.duration => {
+                Position::Time(self.duration)
+            }
+            other => other,
+        };
 
         // gstreamer complains if the start & end value types aren't the same
         match &position {
@@ -550,7 +573,6 @@ impl Video {
         let frame = Arc::new(Mutex::new(Frame::empty()));
         let upload_frame = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
-        let last_frame_time = Arc::new(Mutex::new(Instant::now()));
 
         let subtitle_text = Arc::new(Mutex::new(None));
         let upload_text = Arc::new(AtomicBool::new(false));
@@ -596,7 +618,6 @@ impl Video {
         {
             let frame_ref = Arc::clone(&frame);
             let upload_frame_ref = Arc::clone(&upload_frame);
-            let last_frame_time_ref = Arc::clone(&last_frame_time);
             let subtitle_text_ref = Arc::clone(&subtitle_text);
             let upload_text_ref = Arc::clone(&upload_text);
             let clear_at_ref = Arc::clone(&clear_subtitles_at);
@@ -609,10 +630,6 @@ impl Video {
                 } else {
                     sink.pull_sample().map_err(|_| gst::FlowError::Eos)?
                 };
-
-                if let Ok(mut guard) = last_frame_time_ref.lock() {
-                    *guard = Instant::now();
-                }
 
                 // Check if current frame is past subtitle end time → clear subtitle.
                 if let Some(buffer) = sample.buffer()
@@ -629,7 +646,10 @@ impl Video {
                 }
 
                 if let Ok(mut frame_guard) = frame_ref.lock() {
-                    *frame_guard = Frame(sample);
+                    *frame_guard = Frame {
+                        sample,
+                        received_at: Instant::now(),
+                    };
                 }
                 upload_frame_ref.store(true, Ordering::SeqCst);
 
@@ -664,7 +684,6 @@ impl Video {
             frame,
             upload_frame,
             frame_notified: Arc::new(AtomicBool::new(false)),
-            last_frame_time,
             looping: false,
             is_eos: false,
             restart_stream: false,
@@ -852,8 +871,12 @@ impl Video {
                 .map(|pos| {
                     inner.seek(pos, true)?;
                     inner.upload_frame.store(false, Ordering::SeqCst);
+                    let deadline = Instant::now() + Duration::from_secs(5);
                     while !inner.upload_frame.load(Ordering::SeqCst) {
-                        std::hint::spin_loop();
+                        if Instant::now() >= deadline {
+                            return Err(Error::Timeout);
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
                     }
                     let frame_guard = inner.frame.lock().map_err(|_| Error::Lock)?;
                     let frame = frame_guard.readable().ok_or(Error::Lock)?;
@@ -887,7 +910,21 @@ fn yuv_to_rgba(
     let stride = stride.unwrap_or(width);
 
     let uv_start = stride * height;
-    let mut rgba = vec![];
+    let out_w = (width / downscale) as usize;
+    let out_h = (height / downscale) as usize;
+
+    // NV12 requires stride*height (Y plane) + stride*height/2 (UV plane) bytes.
+    let required = (uv_start + stride * height / 2) as usize;
+    if yuv.len() < required {
+        tracing::warn!(
+            buffer_len = yuv.len(),
+            required,
+            "truncated NV12 buffer, returning black frame"
+        );
+        return vec![0; out_w * out_h * 4];
+    }
+
+    let mut rgba = Vec::with_capacity(out_w * out_h * 4);
 
     for y in 0..height / downscale {
         for x in 0..width / downscale {

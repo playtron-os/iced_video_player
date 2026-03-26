@@ -1,4 +1,4 @@
-use crate::video::{DmaBufPlanes, Frame};
+use crate::video::{DmaBufPlanes, FdGuard, Frame};
 use gstreamer as gst;
 use iced_wgpu::primitive::{Pipeline, Primitive};
 use iced_wgpu::wgpu;
@@ -350,8 +350,10 @@ impl VideoPipeline {
     ) -> bool {
         use iced_wgpu::wgpu::hal::vulkan as vk_hal;
 
-        let y_fd = planes.y_fd;
-        let uv_fd = planes.uv_fd;
+        // FdGuard ensures fds are closed on any early return.
+        // .take() transfers ownership to Vulkan import below.
+        let y_guard = FdGuard::new(planes.y_fd).expect("y_fd from DmaBufPlanes must be valid");
+        let uv_guard = FdGuard::new(planes.uv_fd).expect("uv_fd from DmaBufPlanes must be valid");
 
         // Imported DMA-BUF textures need COPY_SRC so we can copy to GPU-local textures.
         let import_y_desc = wgpu::TextureDescriptor {
@@ -468,25 +470,28 @@ impl VideoPipeline {
                 Some(guard) => guard,
                 None => {
                     warn!("DMA-BUF import unavailable: not a Vulkan backend");
-                    libc::close(y_fd);
-                    libc::close(uv_fd);
+                    // y_guard and uv_guard drop here, closing both fds.
                     return false;
                 }
             };
 
-            let hal_tex_y =
-                match hal_device_guard.texture_from_dmabuf_fd(y_fd, &hal_y_desc, &y_plane_info) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        warn!(error = ?e, "DMA-BUF Y plane import failed");
-                        // y_fd was consumed by the failed attempt; only close uv_fd
-                        libc::close(uv_fd);
-                        return false;
-                    }
-                };
+            // .take() transfers fd ownership to Vulkan; on failure Vulkan
+            // consumes it internally, so FdGuard must not close it.
+            let hal_tex_y = match hal_device_guard.texture_from_dmabuf_fd(
+                y_guard.take(),
+                &hal_y_desc,
+                &y_plane_info,
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = ?e, "DMA-BUF Y plane import failed");
+                    // uv_guard drops here, closing uv_fd.
+                    return false;
+                }
+            };
 
             let hal_tex_uv = match hal_device_guard.texture_from_dmabuf_fd(
-                uv_fd,
+                uv_guard.take(),
                 &hal_uv_desc,
                 &uv_plane_info,
             ) {

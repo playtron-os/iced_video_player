@@ -190,12 +190,12 @@ where
         }
 
         if upload_frame {
-            let last_frame_time = inner
-                .last_frame_time
+            let received_at = inner
+                .frame
                 .lock()
-                .map(|time| *time)
+                .map(|f| f.received_at)
                 .unwrap_or_else(|_| Instant::now());
-            inner.set_av_offset(Instant::now() - last_frame_time);
+            inner.set_av_offset(Instant::now() - received_at);
         }
 
         let render = |renderer: &mut Renderer| {

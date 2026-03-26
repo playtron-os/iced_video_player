@@ -5,6 +5,7 @@ use gstreamer_app as gst_app;
 use gstreamer_app::prelude::*;
 use gstreamer_video::VideoMeta;
 use iced::widget::image as img;
+use iced_wgpu::wgpu;
 use std::num::NonZeroU8;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::io::RawFd;
@@ -12,6 +13,49 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
+
+/// Video pixel format for the decoded frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VideoFormat {
+    /// 8-bit NV12 (4:2:0, 1.5 bytes/pixel).
+    Nv12,
+    /// 10-bit P010 (4:2:0, 3 bytes/pixel, 16-bit samples).
+    P010,
+}
+
+impl VideoFormat {
+    /// Detect format from a GStreamer caps structure.
+    pub fn from_caps(s: &gst::StructureRef) -> Self {
+        if let Ok(fmt) = s.get::<&str>("format")
+            && fmt.starts_with("P010")
+        {
+            return Self::P010;
+        }
+        // DMA-BUF caps may use drm-format instead of format.
+        if let Ok(drm_fmt) = s.get::<&str>("drm-format")
+            && drm_fmt.starts_with("P010")
+        {
+            return Self::P010;
+        }
+        Self::Nv12
+    }
+
+    /// wgpu texture format for the Y (luma) plane.
+    pub fn y_format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Nv12 => wgpu::TextureFormat::R8Unorm,
+            Self::P010 => wgpu::TextureFormat::R16Unorm,
+        }
+    }
+
+    /// wgpu texture format for the UV (chroma) plane.
+    pub fn uv_format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Nv12 => wgpu::TextureFormat::Rg8Unorm,
+            Self::P010 => wgpu::TextureFormat::Rg16Unorm,
+        }
+    }
+}
 
 /// Position in the media.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -189,7 +233,7 @@ impl Frame {
     }
 }
 
-/// DMA-BUF file descriptors and layout for NV12 Y and UV planes.
+/// DMA-BUF file descriptors and layout for NV12/P010 Y and UV planes.
 ///
 /// The fds are duplicated and owned by this struct. Vulkan will take ownership
 /// when importing, so they must NOT be closed manually after import.
@@ -250,6 +294,7 @@ pub(crate) struct Internal {
     pub(crate) height: i32,
     pub(crate) framerate: f64,
     pub(crate) duration: Duration,
+    pub(crate) format: VideoFormat,
     pub(crate) speed: f64,
     pub(crate) sync_av: bool,
 
@@ -433,7 +478,7 @@ impl Video {
 
         // Try generic DMA-BUF pipeline (VA-API decoders on Intel/AMD)
         let dmabuf_pipeline = format!(
-            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"appsink name=iced_video drop=true caps=video/x-raw(memory:DMABuf),format=NV12,pixel-aspect-ratio=1/1;video/x-raw,format=NV12,pixel-aspect-ratio=1/1\"",
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"appsink name=iced_video drop=true caps=video/x-raw(memory:DMABuf),format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1;video/x-raw,format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1\"",
             uri.as_str()
         );
         match Self::try_launch_playbin(&dmabuf_pipeline) {
@@ -449,7 +494,7 @@ impl Video {
         // Fallback: CPU copy with videoconvert
         info!("Falling back to CPU-copy pipeline");
         let cpu_pipeline = format!(
-            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"videoscale ! videoconvert ! appsink name=iced_video drop=true caps=video/x-raw,format=NV12,pixel-aspect-ratio=1/1\"",
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"videoscale ! videoconvert ! appsink name=iced_video drop=true caps=video/x-raw,format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1\"",
             uri.as_str()
         );
         Self::try_launch_playbin(&cpu_pipeline)
@@ -508,7 +553,7 @@ impl Video {
     }
 
     /// Creates a new video based on an existing GStreamer pipeline and appsink.
-    /// Expects an `appsink` plugin with `caps=video/x-raw,format=NV12`.
+    /// Expects an `appsink` with `caps=video/x-raw,format={NV12,P010_10LE}`.
     ///
     /// An optional `text_sink` can be provided, which enables subtitle messages
     /// to be emitted.
@@ -542,14 +587,14 @@ impl Video {
         // wait for up to 5 seconds until the decoder gets the source capabilities
         cleanup!(pipeline.state(gst::ClockTime::from_seconds(5)).0)?;
 
-        // extract resolution and framerate
-        // TODO(jazzfool): maybe we want to extract some other information too?
+        // extract resolution, framerate, and pixel format
         let caps = cleanup!(pad.current_caps().ok_or(Error::Caps))?;
         let s = cleanup!(caps.structure(0).ok_or(Error::Caps))?;
         let width = cleanup!(s.get::<i32>("width").map_err(|_| Error::Caps))?;
         let height = cleanup!(s.get::<i32>("height").map_err(|_| Error::Caps))?;
         let framerate = cleanup!(s.get::<gst::Fraction>("framerate").map_err(|_| Error::Caps))?;
         let framerate = framerate.numer() as f64 / framerate.denom() as f64;
+        let format = VideoFormat::from_caps(s);
 
         if framerate.is_nan()
             || framerate.is_infinite()
@@ -569,7 +614,8 @@ impl Video {
 
         let sync_av = pipeline.has_property("av-offset", None);
 
-        // NV12 = 12bpp
+        info!(width, height, ?format, framerate, "Video negotiated");
+
         let frame = Arc::new(Mutex::new(Frame::empty()));
         let upload_frame = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
@@ -678,6 +724,7 @@ impl Video {
             height,
             framerate,
             duration,
+            format,
             speed: 1.0,
             sync_av,
 
@@ -885,7 +932,14 @@ impl Video {
                     Ok(img::Handle::from_rgba(
                         inner.width as u32 / downscale,
                         inner.height as u32 / downscale,
-                        yuv_to_rgba(frame.as_slice(), width as _, height as _, downscale, stride),
+                        yuv_to_rgba(
+                            frame.as_slice(),
+                            width as _,
+                            height as _,
+                            downscale,
+                            stride,
+                            inner.format,
+                        ),
                     ))
                 })
                 .collect()
@@ -905,50 +959,77 @@ fn yuv_to_rgba(
     height: u32,
     downscale: u32,
     stride: Option<u32>,
+    format: VideoFormat,
 ) -> Vec<u8> {
     // Use stride from VideoMeta if available, otherwise assume stride == width
-    let stride = stride.unwrap_or(width);
+    // (for P010 the stride is in bytes and already accounts for 2 bytes/sample).
+    let stride = stride.unwrap_or(match format {
+        VideoFormat::Nv12 => width,
+        VideoFormat::P010 => width * 2,
+    });
 
     let uv_start = stride * height;
     let out_w = (width / downscale) as usize;
     let out_h = (height / downscale) as usize;
 
-    // NV12 requires stride*height (Y plane) + stride*height/2 (UV plane) bytes.
+    // Validate buffer size.
+    // NV12: stride*height (Y) + stride*height/2 (UV) = stride*height*1.5
+    // P010: stride*height (Y, 2 bytes/sample) + stride*height/2 (UV, 2 bytes/sample) = stride*height*1.5
+    // Both have the same ratio because stride already accounts for sample size.
     let required = (uv_start + stride * height / 2) as usize;
     if yuv.len() < required {
         tracing::warn!(
             buffer_len = yuv.len(),
             required,
-            "truncated NV12 buffer, returning black frame"
+            ?format,
+            "truncated buffer, returning black frame"
         );
         return vec![0; out_w * out_h * 4];
     }
 
     let mut rgba = Vec::with_capacity(out_w * out_h * 4);
 
-    for y in 0..height / downscale {
-        for x in 0..width / downscale {
-            let x_src = x * downscale;
-            let y_src = y * downscale;
+    for row in 0..height / downscale {
+        for col in 0..width / downscale {
+            let x_src = col * downscale;
+            let y_src = row * downscale;
 
-            // NV12 memory layout with stride:
-            // Y plane: stride bytes per row, starting at offset 0
-            // UV plane: stride bytes per row (same stride), starting at offset stride * height
-            // Each pixel is 1 byte Y, and every 2x2 block shares 2 bytes (U, V)
-            let y_offset = (y_src * stride + x_src) as usize;
-            let uv_offset = (uv_start + (y_src / 2) * stride + (x_src / 2) * 2) as usize;
+            let (y_val, u_val, v_val) = match format {
+                VideoFormat::Nv12 => {
+                    // NV12: 1 byte per Y sample, interleaved UV (2 bytes per 2×2 block)
+                    let y_off = (y_src * stride + x_src) as usize;
+                    let uv_off = (uv_start + (y_src / 2) * stride + (x_src / 2) * 2) as usize;
+                    (
+                        yuv[y_off] as f32,
+                        yuv[uv_off] as f32,
+                        yuv[uv_off + 1] as f32,
+                    )
+                }
+                VideoFormat::P010 => {
+                    // P010: 2 bytes (u16 LE) per Y sample, interleaved UV (4 bytes per 2×2 block)
+                    let y_off = (y_src * stride + x_src * 2) as usize;
+                    let uv_off = (uv_start + (y_src / 2) * stride + (x_src / 2) * 4) as usize;
+                    // Read 16-bit little-endian values, shift right 6 to get 10-bit range (0-1023)
+                    let y16 = u16::from_le_bytes([yuv[y_off], yuv[y_off + 1]]) >> 6;
+                    let u16v = u16::from_le_bytes([yuv[uv_off], yuv[uv_off + 1]]) >> 6;
+                    let v16 = u16::from_le_bytes([yuv[uv_off + 2], yuv[uv_off + 3]]) >> 6;
+                    // Scale 10-bit (0-1023) to 8-bit range (0-255) for the same BT.601 math
+                    (
+                        (y16 as f32) * 255.0 / 1023.0,
+                        (u16v as f32) * 255.0 / 1023.0,
+                        (v16 as f32) * 255.0 / 1023.0,
+                    )
+                }
+            };
 
-            let y = yuv[y_offset] as f32;
-            let u = yuv[uv_offset] as f32;
-            let v = yuv[uv_offset + 1] as f32;
+            // BT.601 narrow-range YUV→RGB (8-bit scale)
+            let r = 1.164 * (y_val - 16.0) + 1.596 * (v_val - 128.0);
+            let g = 1.164 * (y_val - 16.0) - 0.813 * (v_val - 128.0) - 0.391 * (u_val - 128.0);
+            let b = 1.164 * (y_val - 16.0) + 2.018 * (u_val - 128.0);
 
-            let r = 1.164 * (y - 16.0) + 1.596 * (v - 128.0);
-            let g = 1.164 * (y - 16.0) - 0.813 * (v - 128.0) - 0.391 * (u - 128.0);
-            let b = 1.164 * (y - 16.0) + 2.018 * (u - 128.0);
-
-            rgba.push(r as u8);
-            rgba.push(g as u8);
-            rgba.push(b as u8);
+            rgba.push(r.clamp(0.0, 255.0) as u8);
+            rgba.push(g.clamp(0.0, 255.0) as u8);
+            rgba.push(b.clamp(0.0, 255.0) as u8);
             rgba.push(0xFF);
         }
     }

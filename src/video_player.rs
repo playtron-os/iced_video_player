@@ -206,6 +206,7 @@ where
                     Arc::clone(&inner.alive),
                     Arc::clone(&inner.frame),
                     (inner.width as _, inner.height as _),
+                    inner.format,
                     upload_frame,
                 ),
             );

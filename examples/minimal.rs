@@ -13,8 +13,24 @@ fn main() -> iced::Result {
         )
         .init();
 
+    let path = std::env::args()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(file!())
+                .parent()
+                .unwrap()
+                .join("../.media/test.mp4")
+        })
+        .canonicalize()
+        .expect("media file not found");
+
+    VIDEO_PATH.set(path).expect("VIDEO_PATH already set");
+
     iced::run(App::update, App::view)
 }
+
+static VIDEO_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 #[derive(Clone, Debug)]
 enum Message {
@@ -34,19 +50,9 @@ struct App {
 
 impl Default for App {
     fn default() -> Self {
+        let path = VIDEO_PATH.get().expect("VIDEO_PATH not set");
         App {
-            video: Video::new(
-                &url::Url::from_file_path(
-                    std::path::PathBuf::from(file!())
-                        .parent()
-                        .unwrap()
-                        .join("../.media/test.mp4")
-                        .canonicalize()
-                        .unwrap(),
-                )
-                .unwrap(),
-            )
-            .unwrap(),
+            video: Video::new(&url::Url::from_file_path(path).unwrap()).unwrap(),
             position: 0.0,
             dragging: false,
         }

@@ -1,4 +1,4 @@
-use crate::video::{DmaBufPlanes, FdGuard, Frame};
+use crate::video::{DmaBufPlanes, FdGuard, Frame, VideoFormat};
 use gstreamer as gst;
 use iced_wgpu::primitive::{Pipeline, Primitive};
 use iced_wgpu::wgpu;
@@ -175,11 +175,16 @@ impl VideoPipeline {
         video_id: u64,
         alive: &Arc<AtomicBool>,
         (width, height): (u32, u32),
+        format: VideoFormat,
         frame: &[u8],
         stride: Option<u32>,
     ) {
-        // Use stride from GStreamer's VideoMeta if available, otherwise assume stride == width
-        let stride = stride.unwrap_or(width);
+        // Use stride from GStreamer's VideoMeta if available.
+        // Stride is in bytes: NV12 = 1 byte/pixel, P010 = 2 bytes/pixel.
+        let stride = stride.unwrap_or(match format {
+            VideoFormat::Nv12 => width,
+            VideoFormat::P010 => width * 2,
+        });
         if let Entry::Vacant(entry) = self.videos.entry(video_id) {
             let texture_y = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("iced_video_player texture"),
@@ -191,7 +196,7 @@ impl VideoPipeline {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
+                format: format.y_format(),
                 usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
@@ -206,7 +211,7 @@ impl VideoPipeline {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rg8Unorm,
+                format: format.uv_format(),
                 usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
@@ -345,6 +350,7 @@ impl VideoPipeline {
         video_id: u64,
         alive: &Arc<AtomicBool>,
         (width, height): (u32, u32),
+        format: VideoFormat,
         planes: DmaBufPlanes,
         sample: gst::Sample,
     ) -> bool {
@@ -366,7 +372,7 @@ impl VideoPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: format.y_format(),
             usage: wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         };
@@ -381,7 +387,7 @@ impl VideoPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg8Unorm,
+            format: format.uv_format(),
             usage: wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         };
@@ -393,7 +399,7 @@ impl VideoPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: format.y_format(),
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         };
@@ -404,7 +410,7 @@ impl VideoPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg8Unorm,
+            format: format.uv_format(),
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         };
@@ -707,6 +713,7 @@ pub(crate) struct VideoPrimitive {
     alive: Arc<AtomicBool>,
     frame: Arc<Mutex<Frame>>,
     size: (u32, u32),
+    format: VideoFormat,
     upload_frame: bool,
 }
 
@@ -716,6 +723,7 @@ impl VideoPrimitive {
         alive: Arc<AtomicBool>,
         frame: Arc<Mutex<Frame>>,
         size: (u32, u32),
+        format: VideoFormat,
         upload_frame: bool,
     ) -> Self {
         VideoPrimitive {
@@ -723,6 +731,7 @@ impl VideoPrimitive {
             alive,
             frame,
             size,
+            format,
             upload_frame,
         }
     }
@@ -754,6 +763,7 @@ impl Primitive for VideoPrimitive {
                     self.video_id,
                     &self.alive,
                     self.size,
+                    self.format,
                     planes,
                     sample,
                 );
@@ -785,6 +795,7 @@ impl Primitive for VideoPrimitive {
                         self.video_id,
                         &self.alive,
                         self.size,
+                        self.format,
                         readable.as_slice(),
                         stride,
                     );

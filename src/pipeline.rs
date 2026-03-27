@@ -1,5 +1,6 @@
 use crate::video::{DmaBufPlanes, FdGuard, Frame, VideoFormat};
 use gstreamer as gst;
+use gstreamer::prelude::*;
 use iced_wgpu::primitive::{Pipeline, Primitive};
 use iced_wgpu::wgpu;
 use std::{
@@ -11,6 +12,27 @@ use std::{
     },
 };
 use tracing::{info, trace, warn};
+
+/// Exported file descriptors for a video's Y and UV plane textures.
+///
+/// These FDs represent Vulkan-allocated memory that can be imported by CUDA
+/// (via `cuImportExternalMemory`) for direct writes. The caller is responsible
+/// for closing the FDs when done.
+#[derive(Debug)]
+pub struct ExportedPlanes {
+    /// Opaque file descriptor for the Y (luma) plane.
+    pub y_fd: std::os::unix::io::RawFd,
+    /// Allocation size of the Y plane in bytes.
+    pub y_size: u64,
+    /// Row pitch (stride) of the Y plane in bytes.
+    pub y_stride: u64,
+    /// Opaque file descriptor for the UV (chroma) plane.
+    pub uv_fd: std::os::unix::io::RawFd,
+    /// Allocation size of the UV plane in bytes.
+    pub uv_size: u64,
+    /// Row pitch (stride) of the UV plane in bytes.
+    pub uv_stride: u64,
+}
 
 #[repr(C)]
 struct Uniforms {
@@ -33,6 +55,10 @@ struct VideoEntry {
     /// GBM buffer from being recycled by gst-cuda-dmabuf before the GPU
     /// finishes copying from it. Cleared when the next frame arrives.
     _prev_dmabuf_sample: Option<gst::Sample>,
+
+    /// When true, CUDA writes directly into these Vulkan textures via exported FDs.
+    /// No per-frame import or copy is needed — just render the existing textures.
+    using_vulkan_export: bool,
 }
 
 pub(crate) struct VideoPipeline {
@@ -284,6 +310,7 @@ impl VideoPipeline {
                 prepare_index: AtomicUsize::new(0),
                 render_index: AtomicUsize::new(0),
                 _prev_dmabuf_sample: None,
+                using_vulkan_export: false,
             });
         }
 
@@ -592,6 +619,7 @@ impl VideoPipeline {
                 prepare_index: AtomicUsize::new(0),
                 render_index: AtomicUsize::new(0),
                 _prev_dmabuf_sample: Some(sample),
+                using_vulkan_export: false,
             });
         } else {
             // Replace textures and rebind for existing entry.
@@ -635,6 +663,218 @@ impl VideoPipeline {
         }
 
         true
+    }
+
+    /// Create exportable Vulkan textures for a video and export their memory
+    /// as DMA-BUF file descriptors. The returned FDs can be imported by CUDA
+    /// for direct zero-copy writes (no GBM intermediary needed).
+    ///
+    /// This sets up the `VideoEntry` with textures that have
+    /// `TEXTURE_BINDING | COPY_DST` usage and exportable backing memory.
+    /// Subsequent frames rendered by CUDA writing into the exported FDs
+    /// will be visible immediately — no GPU-to-GPU copy needed.
+    ///
+    /// Returns `Some(ExportedPlanes)` on success, `None` if the Vulkan
+    /// backend or export extensions are unavailable.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn setup_vulkan_export(
+        &mut self,
+        device: &wgpu::Device,
+        video_id: u64,
+        alive: &Arc<AtomicBool>,
+        (width, height): (u32, u32),
+        format: VideoFormat,
+    ) -> Option<ExportedPlanes> {
+        use iced_wgpu::wgpu::hal::vulkan as vk_hal;
+
+        // HAL descriptors for exportable textures — COPY_DST for potential
+        // CPU fallback writes, TEXTURE_BINDING for rendering.
+        let hal_y_desc = wgpu::hal::TextureDescriptor {
+            label: Some("iced_video_player export Y"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: format.y_format(),
+            usage: wgpu::TextureUses::COPY_DST | wgpu::TextureUses::RESOURCE,
+            memory_flags: wgpu::hal::MemoryFlags::empty(),
+            view_formats: vec![],
+        };
+
+        let hal_uv_desc = wgpu::hal::TextureDescriptor {
+            label: Some("iced_video_player export UV"),
+            size: wgpu::Extent3d {
+                width: width / 2,
+                height: height / 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: format.uv_format(),
+            usage: wgpu::TextureUses::COPY_DST | wgpu::TextureUses::RESOURCE,
+            memory_flags: wgpu::hal::MemoryFlags::empty(),
+            view_formats: vec![],
+        };
+
+        // wgpu public descriptors for create_texture_from_hal.
+        let gpu_y_desc = wgpu::TextureDescriptor {
+            label: Some("iced_video_player export Y"),
+            size: hal_y_desc.size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: format.y_format(),
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+
+        let gpu_uv_desc = wgpu::TextureDescriptor {
+            label: Some("iced_video_player export UV"),
+            size: hal_uv_desc.size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: format.uv_format(),
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+
+        // Create and export via Vulkan HAL.
+        let (texture_y, texture_uv, exported) = unsafe {
+            let hal_device_guard = match device.as_hal::<vk_hal::Api>() {
+                Some(guard) => guard,
+                None => {
+                    warn!("Vulkan export unavailable: not a Vulkan backend");
+                    return None;
+                }
+            };
+
+            let hal_tex_y = match hal_device_guard.create_exportable_texture(&hal_y_desc) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = ?e, "Failed to create exportable Y texture");
+                    return None;
+                }
+            };
+
+            let y_export = match hal_device_guard.export_texture_memory_fd(&hal_tex_y) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = ?e, "Failed to export Y texture FD");
+                    return None;
+                }
+            };
+
+            let hal_tex_uv = match hal_device_guard.create_exportable_texture(&hal_uv_desc) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = ?e, "Failed to create exportable UV texture");
+                    // Close the already-exported Y fd.
+                    libc::close(y_export.fd);
+                    return None;
+                }
+            };
+
+            let uv_export = match hal_device_guard.export_texture_memory_fd(&hal_tex_uv) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = ?e, "Failed to export UV texture FD");
+                    libc::close(y_export.fd);
+                    return None;
+                }
+            };
+
+            let texture_y = device.create_texture_from_hal::<vk_hal::Api>(hal_tex_y, &gpu_y_desc);
+            let texture_uv =
+                device.create_texture_from_hal::<vk_hal::Api>(hal_tex_uv, &gpu_uv_desc);
+
+            let exported = ExportedPlanes {
+                y_fd: y_export.fd,
+                y_size: y_export.size,
+                y_stride: y_export.row_pitch,
+                uv_fd: uv_export.fd,
+                uv_size: uv_export.size,
+                uv_stride: uv_export.row_pitch,
+            };
+
+            (texture_y, texture_uv, exported)
+        };
+
+        info!(
+            y_fd = exported.y_fd,
+            y_size = exported.y_size,
+            y_stride = exported.y_stride,
+            uv_fd = exported.uv_fd,
+            uv_size = exported.uv_size,
+            uv_stride = exported.uv_stride,
+            "Created Vulkan-exported textures for CUDA interop"
+        );
+
+        let view_y = texture_y.create_view(&wgpu::TextureViewDescriptor::default());
+        let view_uv = texture_uv.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("iced_video_player uniform buffer"),
+            size: 256 * std::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("iced_video_player bind group"),
+            layout: &self.bg0_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view_y),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view_uv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &instances,
+                        offset: 0,
+                        size: Some(NonZero::new(std::mem::size_of::<Uniforms>() as _).unwrap()),
+                    }),
+                },
+            ],
+        });
+
+        // Remove any existing entry for this video.
+        if let Some(old) = self.videos.remove(&video_id) {
+            old.texture_y.destroy();
+            old.texture_uv.destroy();
+            old.instances.destroy();
+        }
+
+        self.videos.insert(
+            video_id,
+            VideoEntry {
+                texture_y,
+                texture_uv,
+                instances,
+                bg0: bind_group,
+                alive: Arc::clone(alive),
+                prepare_index: AtomicUsize::new(0),
+                render_index: AtomicUsize::new(0),
+                _prev_dmabuf_sample: None,
+                using_vulkan_export: true,
+            },
+        );
+
+        Some(exported)
     }
 
     fn prepare(&mut self, queue: &wgpu::Queue, video_id: u64, bounds: &iced::Rectangle) {
@@ -715,6 +955,8 @@ pub(crate) struct VideoPrimitive {
     size: (u32, u32),
     format: VideoFormat,
     upload_frame: bool,
+    /// Reference to cudadmabufupload element for Vulkan export setup.
+    cuda_upload: Option<gst::Element>,
 }
 
 impl VideoPrimitive {
@@ -725,6 +967,7 @@ impl VideoPrimitive {
         size: (u32, u32),
         format: VideoFormat,
         upload_frame: bool,
+        cuda_upload: Option<gst::Element>,
     ) -> Self {
         VideoPrimitive {
             video_id,
@@ -733,6 +976,7 @@ impl VideoPrimitive {
             size,
             format,
             upload_frame,
+            cuda_upload,
         }
     }
 }
@@ -749,56 +993,129 @@ impl Primitive for VideoPrimitive {
         viewport: &iced_wgpu::graphics::Viewport,
     ) {
         if self.upload_frame {
-            let frame_guard = self.frame.lock().expect("lock frame mutex");
+            // If Vulkan export is active for this video, CUDA already wrote
+            // into our textures — no import or copy needed.
+            let vulkan_export_active = pipeline
+                .videos
+                .get(&self.video_id)
+                .is_some_and(|v| v.using_vulkan_export);
 
-            // Try DMA-BUF zero-copy path first.
-            let mut used_dmabuf = false;
-            let is_dmabuf = frame_guard.is_dmabuf();
-            if is_dmabuf && let Some(planes) = frame_guard.dmabuf_fds() {
-                trace!("DMA-BUF frame detected, importing");
-                let sample = frame_guard.sample();
-                used_dmabuf = pipeline.upload_dmabuf(
-                    device,
-                    queue,
-                    self.video_id,
-                    &self.alive,
-                    self.size,
-                    self.format,
-                    planes,
-                    sample,
-                );
-                if used_dmabuf {
-                    static LOGGED_DMABUF: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if !LOGGED_DMABUF.swap(true, Ordering::Relaxed) {
-                        info!("DMA-BUF zero-copy rendering active");
-                    }
-                    trace!("DMA-BUF zero-copy import succeeded");
-                }
-            }
+            if !vulkan_export_active {
+                let frame_guard = self.frame.lock().expect("lock frame mutex");
 
-            // Fallback: CPU copy via write_texture.
-            if !used_dmabuf {
-                static LOGGED_CPU: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !LOGGED_CPU.swap(true, Ordering::Relaxed) {
-                    info!(
-                        memory_info = %frame_guard.debug_memory_info(),
-                        "Using CPU copy path"
+                // On first DMA-BUF frame, try to set up Vulkan export for true
+                // zero-copy (CUDA writes directly into Vulkan-owned textures).
+                let is_dmabuf = frame_guard.is_dmabuf();
+                if let (true, Some(element)) = (is_dmabuf, self.cuda_upload.as_ref())
+                    && let Some(exported) = pipeline.setup_vulkan_export(
+                        device,
+                        self.video_id,
+                        &self.alive,
+                        self.size,
+                        self.format,
+                    )
+                {
+                    let is_p010 = self.format == VideoFormat::P010;
+
+                    // Initialize external FD pool on the GStreamer element
+                    let init_ok: bool = element.emit_by_name(
+                        "init-external-pool",
+                        &[&(self.size.0), &(self.size.1), &is_p010],
                     );
+
+                    if init_ok {
+                        // Add the exported buffer pair
+                        let add_ok: bool = element.emit_by_name(
+                            "add-external-buffer",
+                            &[
+                                &(exported.y_fd),
+                                &(exported.y_size),
+                                &(exported.y_stride as u32),
+                                &(exported.uv_fd),
+                                &(exported.uv_size),
+                                &(exported.uv_stride as u32),
+                            ],
+                        );
+
+                        if add_ok {
+                            info!(
+                                "Vulkan export zero-copy active (CUDA writes directly into Vulkan textures)"
+                            );
+                            // The video entry was created by setup_vulkan_export with
+                            // using_vulkan_export = true. Subsequent frames will skip upload.
+                            drop(frame_guard);
+                            pipeline.prepare(
+                                queue,
+                                self.video_id,
+                                &(*bounds
+                                    * iced::Transformation::orthographic(
+                                        viewport.logical_size().width as _,
+                                        viewport.logical_size().height as _,
+                                    )),
+                            );
+                            return;
+                        }
+                        warn!("Failed to add external buffer to GStreamer element");
+                    } else {
+                        warn!("Failed to init external pool on GStreamer element");
+                    }
+                    // Export setup failed — fall through to DMA-BUF import path.
+                    // Remove the export VideoEntry so we don't render garbage.
+                    if let Some(old) = pipeline.videos.remove(&self.video_id) {
+                        old.texture_y.destroy();
+                        old.texture_uv.destroy();
+                        old.instances.destroy();
+                    }
                 }
-                let stride = frame_guard.stride();
-                if let Some(readable) = frame_guard.readable() {
-                    pipeline.upload(
+
+                // Try DMA-BUF zero-copy path (import + copy).
+                let mut used_dmabuf = false;
+                if is_dmabuf && let Some(planes) = frame_guard.dmabuf_fds() {
+                    trace!("DMA-BUF frame detected, importing");
+                    let sample = frame_guard.sample();
+                    used_dmabuf = pipeline.upload_dmabuf(
                         device,
                         queue,
                         self.video_id,
                         &self.alive,
                         self.size,
                         self.format,
-                        readable.as_slice(),
-                        stride,
+                        planes,
+                        sample,
                     );
+                    if used_dmabuf {
+                        static LOGGED_DMABUF: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if !LOGGED_DMABUF.swap(true, Ordering::Relaxed) {
+                            info!("DMA-BUF zero-copy rendering active");
+                        }
+                        trace!("DMA-BUF zero-copy import succeeded");
+                    }
+                }
+
+                // Fallback: CPU copy via write_texture.
+                if !used_dmabuf {
+                    static LOGGED_CPU: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !LOGGED_CPU.swap(true, Ordering::Relaxed) {
+                        info!(
+                            memory_info = %frame_guard.debug_memory_info(),
+                            "Using CPU copy path"
+                        );
+                    }
+                    let stride = frame_guard.stride();
+                    if let Some(readable) = frame_guard.readable() {
+                        pipeline.upload(
+                            device,
+                            queue,
+                            self.video_id,
+                            &self.alive,
+                            self.size,
+                            self.format,
+                            readable.as_slice(),
+                            stride,
+                        );
+                    }
                 }
             }
         }

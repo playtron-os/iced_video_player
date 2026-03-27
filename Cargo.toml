@@ -16,8 +16,8 @@ exclude = [
 ]
 
 [dependencies]
-iced = { git = "https://github.com/playtron-os/iced.git", rev = "f1d40acb", features = ["image", "advanced", "wgpu"] }
-iced_wgpu = { git = "https://github.com/playtron-os/iced.git", rev = "f1d40acb" }
+iced = { git = "https://github.com/playtron-os/iced.git", rev = "ed19f4a3", features = ["image", "advanced", "wgpu"] }
+iced_wgpu = { git = "https://github.com/playtron-os/iced.git", rev = "ed19f4a3" }
 gstreamer = "0.23"
 gstreamer-allocators = "0.23" # DMA-BUF memory detection
 gstreamer-app = "0.23" # appsink

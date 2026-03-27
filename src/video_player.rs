@@ -208,6 +208,7 @@ where
                     (inner.width as _, inner.height as _),
                     inner.format,
                     upload_frame,
+                    inner.cuda_upload.clone(),
                 ),
             );
         };

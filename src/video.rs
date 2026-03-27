@@ -312,6 +312,9 @@ pub(crate) struct Internal {
 
     pub(crate) subtitle_text: Arc<Mutex<Option<String>>>,
     pub(crate) upload_text: Arc<AtomicBool>,
+
+    /// Reference to the cudadmabufupload element (if present) for Vulkan export setup.
+    pub(crate) cuda_upload: Option<gst::Element>,
 }
 
 impl Internal {
@@ -463,7 +466,7 @@ impl Video {
 
         // Try NVIDIA CUDA → DMA-BUF pipeline (cudadmabufupload converts CUDA memory to DMA-BUF)
         let nvidia_pipeline = format!(
-            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"cudadmabufupload force-linear=true ! appsink name=iced_video drop=true\"",
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"cudadmabufupload name=cuda_upload force-linear=true ! appsink name=iced_video drop=true\"",
             uri.as_str()
         );
         match Self::try_launch_playbin(&nvidia_pipeline) {
@@ -512,10 +515,15 @@ impl Video {
         let video_sink: gst::Element = pipeline.property("video-sink");
         let video_sink = Self::find_appsink(&video_sink, "iced_video")?;
 
+        // Try to find the cudadmabufupload element for Vulkan export setup.
+        let cuda_upload = Self::find_element_by_name(&pipeline, "cuda_upload");
+
         let text_sink: gst::Element = pipeline.property("text-sink");
         let text_sink = Self::find_appsink(&text_sink, "iced_text")?;
 
-        Self::from_gst_pipeline(pipeline, video_sink, Some(text_sink))
+        let mut video = Self::from_gst_pipeline(pipeline, video_sink, Some(text_sink))?;
+        video.0.get_mut().expect("lock").cuda_upload = cuda_upload;
+        Ok(video)
     }
 
     /// Find a named AppSink inside an element that may be a Bin wrapper.
@@ -550,6 +558,19 @@ impl Video {
         }
 
         Err(Error::AppSink(name.to_string()))
+    }
+
+    /// Find a named element in the pipeline hierarchy.
+    fn find_element_by_name(pipeline: &gst::Pipeline, name: &str) -> Option<gst::Element> {
+        // playbin → video-sink may be a Bin
+        let video_sink: gst::Element = pipeline.property("video-sink");
+        if let Ok(bin) = video_sink.clone().downcast::<gst::Bin>()
+            && let Some(found) = bin.by_name(name)
+        {
+            return Some(found.upcast());
+        }
+        // Try the pipeline directly (recurse all children)
+        pipeline.by_name(name).map(|e| e.upcast())
     }
 
     /// Creates a new video based on an existing GStreamer pipeline and appsink.
@@ -739,6 +760,8 @@ impl Video {
 
             subtitle_text,
             upload_text,
+
+            cuda_upload: None,
         })))
     }
 

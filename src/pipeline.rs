@@ -37,8 +37,14 @@ pub struct ExportedPlanes {
 #[repr(C)]
 struct Uniforms {
     rect: [f32; 4],
-    // because wgpu min_uniform_buffer_offset_alignment
-    _pad: [u8; 240],
+    /// Pixel size of the (cover-overflowing) draw rect.
+    bounds: [f32; 2],
+    /// Pixel size of the visible/clip rect (the chip), for the rounded-corner SDF.
+    clip_size: [f32; 2],
+    /// Corner radius in pixels (0 = square).
+    radius: f32,
+    // pad up to wgpu min_uniform_buffer_offset_alignment (256)
+    _pad: [u8; 220],
 }
 
 struct VideoEntry {
@@ -106,7 +112,9 @@ impl Pipeline for VideoPipeline {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    // Read in the vertex shader (rect) and the fragment shader
+                    // (bounds + radius for rounded corners).
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
@@ -144,7 +152,7 @@ impl Pipeline for VideoPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -877,7 +885,15 @@ impl VideoPipeline {
         Some(exported)
     }
 
-    fn prepare(&mut self, queue: &wgpu::Queue, video_id: u64, bounds: &iced::Rectangle) {
+    fn prepare(
+        &mut self,
+        queue: &wgpu::Queue,
+        video_id: u64,
+        bounds: &iced::Rectangle,
+        pixel_size: (f32, f32),
+        clip_size: (f32, f32),
+        radius: f32,
+    ) {
         if let Some(video) = self.videos.get_mut(&video_id) {
             let uniforms = Uniforms {
                 rect: [
@@ -886,7 +902,10 @@ impl VideoPipeline {
                     bounds.x + bounds.width,
                     bounds.y + bounds.height,
                 ],
-                _pad: [0; 240],
+                bounds: [pixel_size.0, pixel_size.1],
+                clip_size: [clip_size.0, clip_size.1],
+                radius,
+                _pad: [0; 220],
             };
             queue.write_buffer(
                 &video.instances,
@@ -957,9 +976,15 @@ pub(crate) struct VideoPrimitive {
     upload_frame: bool,
     /// Reference to cudadmabufupload element for Vulkan export setup.
     cuda_upload: Option<gst::Element>,
+    /// Corner radius in logical pixels (0 = square).
+    border_radius: f32,
+    /// Visible/clip rect size in logical pixels (the widget bounds), used to
+    /// round the visible corners even when the draw rect overflows under Cover.
+    clip_size: (f32, f32),
 }
 
 impl VideoPrimitive {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         video_id: u64,
         alive: Arc<AtomicBool>,
@@ -968,6 +993,8 @@ impl VideoPrimitive {
         format: VideoFormat,
         upload_frame: bool,
         cuda_upload: Option<gst::Element>,
+        border_radius: f32,
+        clip_size: (f32, f32),
     ) -> Self {
         VideoPrimitive {
             video_id,
@@ -977,6 +1004,8 @@ impl VideoPrimitive {
             format,
             upload_frame,
             cuda_upload,
+            border_radius,
+            clip_size,
         }
     }
 }
@@ -1052,6 +1081,9 @@ impl Primitive for VideoPrimitive {
                                         viewport.logical_size().width as _,
                                         viewport.logical_size().height as _,
                                     )),
+                                (bounds.width, bounds.height),
+                                self.clip_size,
+                                self.border_radius,
                             );
                             return;
                         }
@@ -1128,6 +1160,9 @@ impl Primitive for VideoPrimitive {
                     viewport.logical_size().width as _,
                     viewport.logical_size().height as _,
                 )),
+            (bounds.width, bounds.height),
+            self.clip_size,
+            self.border_radius,
         );
     }
 

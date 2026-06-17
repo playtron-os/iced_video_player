@@ -65,6 +65,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -467,6 +482,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli-decompressor"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
+
+[[package]]
 name = "built"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -703,7 +728,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.18.0"
-source = "git+https://github.com/playtron-os/cosmic-text.git?rev=f1ef5fe3#f1ef5fe30a03dac352c027fe50a6038eb47dc6da"
+source = "git+https://github.com/playtron-os/cosmic-text.git?rev=b559a844e372dfe73786750401e619770c4c5607#b559a844e372dfe73786750401e619770c4c5607"
 dependencies = [
  "bitflags 2.11.0",
  "fontdb",
@@ -767,7 +792,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "cryoglyph"
 version = "0.1.0"
-source = "git+https://github.com/playtron-os/cryoglyph.git?rev=8051b64#8051b64fd2356b069b6f9c7dd9d36f9dbf24700a"
+source = "git+https://github.com/playtron-os/cryoglyph.git?rev=475fb00#475fb00d57358bae86301bae11bc852ecb152b40"
 dependencies = [
  "cosmic-text",
  "etagere",
@@ -842,7 +867,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/playtron-os/winit.git?rev=dd5964a4#dd5964a4ca20525614b11b527fcbcf9ace852a24"
+source = "git+https://github.com/playtron-os/winit.git?branch=feat%2Frebase-v0.30.12#d3d664ba424c2cdf84520098e6f9c3fae632c5d8"
 
 [[package]]
 name = "either"
@@ -1637,7 +1662,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 [[package]]
 name = "iced"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "iced_core",
  "iced_debug",
@@ -1653,7 +1678,7 @@ dependencies = [
 [[package]]
 name = "iced_core"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "bitflags 2.11.0",
  "bytes",
@@ -1670,7 +1695,7 @@ dependencies = [
 [[package]]
 name = "iced_debug"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "iced_core",
  "iced_futures",
@@ -1680,7 +1705,7 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "futures",
  "iced_core",
@@ -1693,7 +1718,7 @@ dependencies = [
 [[package]]
 name = "iced_graphics"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
@@ -1702,6 +1727,7 @@ dependencies = [
  "iced_core",
  "iced_futures",
  "image",
+ "jxl-oxide",
  "kamadak-exif",
  "log",
  "raw-window-handle",
@@ -1713,7 +1739,7 @@ dependencies = [
 [[package]]
 name = "iced_program"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "iced_graphics",
  "iced_runtime",
@@ -1722,7 +1748,7 @@ dependencies = [
 [[package]]
 name = "iced_renderer"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -1734,11 +1760,12 @@ dependencies = [
 [[package]]
 name = "iced_runtime"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "bytes",
  "iced_core",
  "iced_futures",
+ "log",
  "raw-window-handle",
  "thiserror 2.0.18",
 ]
@@ -1746,7 +1773,7 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -1782,7 +1809,7 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
@@ -1801,7 +1828,7 @@ dependencies = [
 [[package]]
 name = "iced_widget"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "iced_renderer",
  "log",
@@ -1814,7 +1841,7 @@ dependencies = [
 [[package]]
 name = "iced_winit"
 version = "0.15.0-dev"
-source = "git+https://github.com/playtron-os/iced.git?rev=ed19f4a3#ed19f4a3cdee3d55d3c952bb98f459a0437f2901"
+source = "git+https://github.com/playtron-os/iced.git#ea5a432cc2cb92ebbc3fde563f1ef3b055c2cce0"
 dependencies = [
  "arboard",
  "iced_debug",
@@ -2056,6 +2083,184 @@ checksum = "b49715b7073f385ba4bc528e5747d02e66cb39c6146efb66b781f131f0fb399c"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jxl-bitstream"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b480e752277e29eb4054f69546887a9b84656fe78c08f54ba5850ced98a378fe"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
+name = "jxl-coding"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd972bcd125e776f1eb241ac50e39f956095a1c2770c64736c968f8946bd9a3c"
+dependencies = [
+ "jxl-bitstream",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-color"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f316b1358c1711755b3ee8e8cb5c4a1dad12e796233088a7a513440782de80b2"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-frame"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d967c6fd669c7c01060b5022d8835fa82fd46b06ffc98b549f17600a097c2b3"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "jxl-vardct",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-grid"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01671307879a033bfa52e6e8784b941aca770b3f3a7d33830b455b6844f793fb"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
+name = "jxl-image"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5f752d62577c702a94dbbce4045caf08cb58639e8a4d56464b40ecf33ffe565"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-grid",
+ "jxl-oxide-common",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-jbr"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e35d032bcec660647828527ff42c6f5776d2fd44b8357f9f6d9ac6dc07218e46"
+dependencies = [
+ "brotli-decompressor",
+ "jxl-bitstream",
+ "jxl-frame",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "jxl-vardct",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-modular"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a2f045b24c738dd91d482be385512b512721ae08a671bd4b27bf1c47f215235"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-oxide"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d36c662923f47586880211f3bc7c0d83fb3a9b410d278c7bde93450748abeef3"
+dependencies = [
+ "brotli-decompressor",
+ "bytemuck",
+ "image",
+ "jxl-bitstream",
+ "jxl-color",
+ "jxl-frame",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-jbr",
+ "jxl-oxide-common",
+ "jxl-render",
+ "jxl-threadpool",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-oxide-common"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b62394c5021b3a9e7e0dbb2d639d555d019090c9946c39f6d3b09d390db4157b"
+dependencies = [
+ "jxl-bitstream",
+]
+
+[[package]]
+name = "jxl-render"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d34386bfdb6a19b5a30cc9beb4d475d537422c31ae8c39bb69640fcce3fcaf19"
+dependencies = [
+ "bytemuck",
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-color",
+ "jxl-frame",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "jxl-vardct",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-threadpool"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f15eb830aa77a7f21148d72e153562a26bfe570139bd4922eab1908dd499d3"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
+name = "jxl-vardct"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce72a18c6d3a47172ab6c479be2bdb56f22066b5d7092663f03b4490820b4511"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "tracing",
 ]
 
 [[package]]
@@ -4903,7 +5108,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.12"
-source = "git+https://github.com/playtron-os/winit.git?rev=dd5964a4#dd5964a4ca20525614b11b527fcbcf9ace852a24"
+source = "git+https://github.com/playtron-os/winit.git?branch=feat%2Frebase-v0.30.12#d3d664ba424c2cdf84520098e6f9c3fae632c5d8"
 dependencies = [
  "ahash",
  "android-activity",

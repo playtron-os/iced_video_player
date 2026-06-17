@@ -17,6 +17,7 @@ where
 {
     video: &'a Video,
     content_fit: iced::ContentFit,
+    border_radius: f32,
     width: iced::Length,
     height: iced::Length,
     on_end_of_stream: Option<Message>,
@@ -35,6 +36,7 @@ where
         VideoPlayer {
             video,
             content_fit: iced::ContentFit::default(),
+            border_radius: 0.0,
             width: iced::Length::Shrink,
             height: iced::Length::Shrink,
             on_end_of_stream: None,
@@ -57,6 +59,15 @@ where
     pub fn height(self, height: impl Into<iced::Length>) -> Self {
         VideoPlayer {
             height: height.into(),
+            ..self
+        }
+    }
+
+    /// Sets the corner radius (in logical pixels) used to round the video's
+    /// corners. `0` (the default) leaves the video square.
+    pub fn border_radius(self, border_radius: f32) -> Self {
+        VideoPlayer {
+            border_radius,
             ..self
         }
     }
@@ -209,6 +220,8 @@ where
                     inner.format,
                     upload_frame,
                     inner.cuda_upload.clone(),
+                    self.border_radius,
+                    (bounds.width, bounds.height),
                 ),
             );
         };
@@ -242,6 +255,7 @@ where
                     inner.restart_stream = false;
                 }
                 let mut eos_pause = false;
+                let mut eos = false;
 
                 while let Some(msg) = inner
                     .bus
@@ -254,19 +268,27 @@ where
                                 shell.publish(on_error(&err.error()))
                             };
                         }
-                        gst::MessageView::Eos(_eos) => {
-                            if emit_eos
-                                && let Some(on_end_of_stream) = self.on_end_of_stream.clone()
-                            {
-                                shell.publish(on_end_of_stream);
-                            }
-                            if inner.looping {
-                                restart_stream = true;
-                            } else {
-                                eos_pause = true;
-                            }
-                        }
+                        gst::MessageView::Eos(_eos) => eos = true,
                         _ => {}
+                    }
+                }
+
+                // Also treat the video appsink's own EOS callback as end-of-stream:
+                // `playbin`'s bus EOS only fires once *all* sinks (incl. the auto
+                // audio sink) have drained, so the video-specific signal is a more
+                // direct "the video finished" for inline previews.
+                if !eos && inner.reached_eos.load(Ordering::SeqCst) {
+                    eos = true;
+                }
+
+                if eos {
+                    if emit_eos && let Some(on_end_of_stream) = self.on_end_of_stream.clone() {
+                        shell.publish(on_end_of_stream);
+                    }
+                    if inner.looping {
+                        restart_stream = true;
+                    } else {
+                        eos_pause = true;
                     }
                 }
 

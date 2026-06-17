@@ -304,6 +304,9 @@ pub(crate) struct Internal {
     /// Cleared by draw() when it consumes upload_frame.
     /// Prevents duplicate NewFrame messages per actual video frame.
     pub(crate) frame_notified: Arc<AtomicBool>,
+    /// Set by the video appsink's EOS callback when the stream ends (more
+    /// reliable than the pipeline bus for this playbin+appsink setup).
+    pub(crate) reached_eos: Arc<AtomicBool>,
     pub(crate) looping: bool,
     pub(crate) is_eos: bool,
     pub(crate) restart_stream: bool,
@@ -392,6 +395,7 @@ impl Internal {
 
     pub(crate) fn restart_stream(&mut self) -> Result<(), Error> {
         self.is_eos = false;
+        self.reached_eos.store(false, Ordering::SeqCst);
         self.set_paused(false);
         self.seek(0, false)?;
         Ok(())
@@ -464,9 +468,12 @@ impl Video {
         // 2. Generic DMA-BUF (VA-API decoders produce DMA-BUF directly)
         // 3. CPU fallback (videoconvert → system memory NV12)
 
-        // Try NVIDIA CUDA → DMA-BUF pipeline (cudadmabufupload converts CUDA memory to DMA-BUF)
+        // Try NVIDIA CUDA → DMA-BUF pipeline (cudadmabufupload converts CUDA memory to DMA-BUF).
+        // Constrain the appsink to NV12/P010 (accepting DMA-BUF *or* system memory):
+        // without this, the sink may negotiate planar I420, which the NV12-assuming
+        // upload/shader read as interleaved UV → a green/magenta chroma cast.
         let nvidia_pipeline = format!(
-            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"cudadmabufupload name=cuda_upload force-linear=true ! appsink name=iced_video drop=true\"",
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true wait-on-eos=false\" video-sink=\"cudadmabufupload name=cuda_upload force-linear=true ! appsink name=iced_video drop=true wait-on-eos=false caps=video/x-raw(memory:DMABuf),format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1;video/x-raw,format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1\"",
             uri.as_str()
         );
         match Self::try_launch_playbin(&nvidia_pipeline) {
@@ -481,7 +488,7 @@ impl Video {
 
         // Try generic DMA-BUF pipeline (VA-API decoders on Intel/AMD)
         let dmabuf_pipeline = format!(
-            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"appsink name=iced_video drop=true caps=video/x-raw(memory:DMABuf),format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1;video/x-raw,format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1\"",
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true wait-on-eos=false\" video-sink=\"appsink name=iced_video drop=true wait-on-eos=false caps=video/x-raw(memory:DMABuf),format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1;video/x-raw,format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1\"",
             uri.as_str()
         );
         match Self::try_launch_playbin(&dmabuf_pipeline) {
@@ -496,11 +503,28 @@ impl Video {
 
         // Fallback: CPU copy with videoconvert
         info!("Falling back to CPU-copy pipeline");
-        let cpu_pipeline = format!(
-            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true\" video-sink=\"videoscale ! videoconvert ! appsink name=iced_video drop=true caps=video/x-raw,format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1\"",
+        Self::try_launch_playbin(&Self::software_pipeline(uri))
+    }
+
+    /// Creates a video that always uses the simple **CPU-copy** pipeline
+    /// (`videoconvert` → system-memory NV12 → CPU texture upload), bypassing the
+    /// hardware DMA-BUF / zero-copy import paths.
+    ///
+    /// Slightly slower for large videos, but avoids platform-specific DMA-BUF
+    /// import quirks — ideal for small previews/thumbnails that must render with
+    /// correct colors everywhere.
+    pub fn new_software(uri: &url::Url) -> Result<Self, Error> {
+        gst::init()?;
+        info!("Using software CPU-copy pipeline (requested)");
+        Self::try_launch_playbin(&Self::software_pipeline(uri))
+    }
+
+    /// The simple CPU-copy `playbin` pipeline string (system-memory NV12/P010).
+    fn software_pipeline(uri: &url::Url) -> String {
+        format!(
+            "playbin uri=\"{}\" text-sink=\"appsink name=iced_text sync=true drop=true wait-on-eos=false\" video-sink=\"videoscale ! videoconvert ! appsink name=iced_video drop=true wait-on-eos=false caps=video/x-raw,format={{NV12,P010_10LE}},pixel-aspect-ratio=1/1\"",
             uri.as_str()
-        );
-        Self::try_launch_playbin(&cpu_pipeline)
+        )
     }
 
     /// Try to launch a playbin pipeline string and wire up sinks.
@@ -636,10 +660,16 @@ impl Video {
         let sync_av = pipeline.has_property("av-offset", None);
 
         info!(width, height, ?format, framerate, "Video negotiated");
+        // Full caps (format/colorimetry/range) — handy when chroma looks wrong.
+        debug!(caps = %caps.to_string(), "negotiated caps");
 
         let frame = Arc::new(Mutex::new(Frame::empty()));
         let upload_frame = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
+        // Set by the video appsink's EOS callback. `playbin` does not reliably
+        // post EOS to the pipeline bus when a custom appsink video-sink (plus an
+        // unfed text-sink) is used, so we detect end-of-stream at the sink itself.
+        let reached_eos = Arc::new(AtomicBool::new(false));
 
         let subtitle_text = Arc::new(Mutex::new(None));
         let upload_text = Arc::new(AtomicBool::new(false));
@@ -725,11 +755,16 @@ impl Video {
 
             let handle_sample_new = handle_sample.clone();
             let handle_sample_preroll = handle_sample;
+            let reached_eos_ref = Arc::clone(&reached_eos);
 
             video_sink.set_callbacks(
                 gst_app::AppSinkCallbacks::builder()
                     .new_sample(move |sink| handle_sample_new(sink, false))
                     .new_preroll(move |sink| handle_sample_preroll(sink, true))
+                    .eos(move |_sink| {
+                        debug!("video appsink reached EOS");
+                        reached_eos_ref.store(true, Ordering::SeqCst);
+                    })
                     .build(),
             );
         }
@@ -752,6 +787,7 @@ impl Video {
             frame,
             upload_frame,
             frame_notified: Arc::new(AtomicBool::new(false)),
+            reached_eos,
             looping: false,
             is_eos: false,
             restart_stream: false,
@@ -1045,10 +1081,11 @@ fn yuv_to_rgba(
                 }
             };
 
-            // BT.601 narrow-range YUV→RGB (8-bit scale)
-            let r = 1.164 * (y_val - 16.0) + 1.596 * (v_val - 128.0);
-            let g = 1.164 * (y_val - 16.0) - 0.813 * (v_val - 128.0) - 0.391 * (u_val - 128.0);
-            let b = 1.164 * (y_val - 16.0) + 2.018 * (u_val - 128.0);
+            // BT.709 narrow-range YUV→RGB (8-bit scale) — matches the GPU shader
+            // and the colorimetry of modern (HD) video / screen recordings.
+            let r = 1.164 * (y_val - 16.0) + 1.793 * (v_val - 128.0);
+            let g = 1.164 * (y_val - 16.0) - 0.213 * (u_val - 128.0) - 0.533 * (v_val - 128.0);
+            let b = 1.164 * (y_val - 16.0) + 2.112 * (u_val - 128.0);
 
             rgba.push(r.clamp(0.0, 255.0) as u8);
             rgba.push(g.clamp(0.0, 255.0) as u8);

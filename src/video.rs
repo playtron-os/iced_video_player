@@ -252,7 +252,22 @@ impl Video {
 
         // extract resolution and framerate
         // TODO(jazzfool): maybe we want to extract some other information too?
-        let caps = pad.current_caps().ok_or(Error::Caps)?;
+        //
+        // Some sources negotiate the video sink caps a short moment *after* the
+        // pipeline reports its state change complete — notably `playbin`'s audio
+        // visualizer branch, used to synthesize video frames for audio-only media
+        // (e.g. mp3). Reading `current_caps()` immediately races that negotiation
+        // and intermittently returns `None`, surfacing as `Error::Caps` ("failed
+        // to get media capabilities"). Poll briefly for the caps to appear.
+        let caps = {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut caps = pad.current_caps();
+            while caps.is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+                caps = pad.current_caps();
+            }
+            caps.ok_or(Error::Caps)?
+        };
         let s = caps.structure(0).ok_or(Error::Caps)?;
         let width = s.get::<i32>("width").map_err(|_| Error::Caps)?;
         let height = s.get::<i32>("height").map_err(|_| Error::Caps)?;

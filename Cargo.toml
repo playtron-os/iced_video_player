@@ -26,8 +26,19 @@ thiserror = "1"
 url = "2" # media uri
 html-escape = "0.2.13"
 
+# Pinned to the same branch cosmic-player and cosmic-edit use. Consumers patch
+# `https://github.com/pop-os/libcosmic` -> playtron-os, but that patch table does
+# NOT cover this dependency, which names playtron-os directly. Left unbranched it
+# resolves to `master`, which is a second libcosmic source id in the consumer's
+# graph: resolution then fails (master needs zbus ^5.15 against ashpd's 5.14), and
+# even if it resolved, this crate's `Widget` impl would come from a different
+# libcosmic than the `Element` it is passed into.
+#
+# `fix/theme-seed-7c4bf15` is upstream 7c4bf15 -- the base this crate already
+# built against -- plus the theme fixes, so it is API-identical here.
 [dependencies.libcosmic]
 git = "https://github.com/playtron-os/libcosmic.git"
+branch = "fix/theme-seed-7c4bf15"
 default-features = false
 features = ["tokio", "winit"]
 

@@ -16,7 +16,27 @@ exclude = [
 ]
 
 [dependencies]
-iced = { git = "https://github.com/playtron-os/iced.git", features = ["image", "advanced", "wgpu"] }
+# iced's default features, MINUS `crisp`, plus the three this crate needs.
+#
+# `crisp` snaps every primitive to the pixel grid. A consumer that turns it
+# off — icetron does, deliberately: it jitters on some monitors — gets it
+# back the moment this crate joins the build, because cargo unifies features
+# across the graph and this dependency took iced's defaults. It cost a day of
+# "why did every pixel move?" in an app whose layout is measured against a
+# reference. The rest of the list is what the defaults already were, so
+# nothing else about this crate's build changes.
+iced = { git = "https://github.com/playtron-os/iced.git", default-features = false, features = [
+    "image",
+    "advanced",
+    "wgpu",
+    "tiny-skia",
+    "hinting",
+    "web-colors",
+    "thread-pool",
+    "linux-theme-detection",
+    "x11",
+    "wayland",
+] }
 iced_wgpu = { git = "https://github.com/playtron-os/iced.git" }
 gstreamer = "0.23"
 gstreamer-allocators = "0.23" # DMA-BUF memory detection

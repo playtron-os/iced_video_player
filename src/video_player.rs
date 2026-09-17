@@ -166,7 +166,7 @@ where
         _style: &advanced::renderer::Style,
         layout: advanced::Layout<'_>,
         _cursor: advanced::mouse::Cursor,
-        _viewport: &iced::Rectangle,
+        viewport: &iced::Rectangle,
     ) {
         let mut inner = self.video.write();
 
@@ -192,6 +192,16 @@ where
         };
 
         let drawing_bounds = iced::Rectangle::new(position, final_size);
+
+        // A layer clips only to its own bounds, not to a scrollable drawn around it. Empty
+        // covers edge contact and ancestors that don't cull hidden children.
+        //
+        // Ahead of the frame bookkeeping: this draw uploads nothing, so the flag has to keep
+        // for the draw that does, and the A/V offset averages how late a frame reached the
+        // screen, which a frame that is never presented has no part in.
+        let Some(visible) = bounds.intersection(viewport) else {
+            return;
+        };
 
         let upload_frame = inner.upload_frame.swap(false, Ordering::SeqCst);
         if upload_frame {
@@ -227,7 +237,7 @@ where
         };
 
         if adjusted_fit.width > bounds.width || adjusted_fit.height > bounds.height {
-            renderer.with_layer(bounds, render);
+            renderer.with_layer(visible, render);
         } else {
             render(renderer);
         }
